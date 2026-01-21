@@ -485,7 +485,20 @@ flowchart TD
 
 ### Common Issues
 
-1. **CUDA Out-of-Memory Errors**
+1. **Token Repetition / Generation Won't Stop**
+   - When using `reasoning_effort: high`, the model may produce repeated tokens and fail to stop
+   - **Solution**: Set `top_p=1` in your request. These are the [recommended sampling parameters from OpenAI](https://huggingface.co/openai/gpt-oss-120b/discussions/21)
+   - Example request with recommended parameters:
+     ```bash
+     curl localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+       "model": "openai/gpt-oss-120b",
+       "messages": [{"role": "user", "content": "Hello"}],
+       "top_p": 1,
+       "max_tokens": 300
+     }'
+     ```
+
+2. **CUDA Out-of-Memory Errors**
    - Reduce `--max-num-tokens` in the launch commands (currently 20000 for prefill, 16384 for decode)
    - Lower `--free-gpu-memory-fraction` from 0.9 to 0.8 or 0.7
    - Ensure model checkpoints are compatible with the expected format

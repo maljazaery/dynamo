@@ -20,7 +20,6 @@ from dynamo.runtime import Client, Component, DistributedRuntime
 from ..args import Config
 from ..handlers import BaseWorkerHandler, build_sampling_params
 from ..multimodal_utils import (
-    MultiModalGroup,
     MyRequestOutput,
     PatchedTokensPrompt,
     vLLMMultimodalRequest,
@@ -29,8 +28,9 @@ from ..multimodal_utils.model import is_qwen_vl_model
 from ..multimodal_utils.prefill_worker_utils import (
     IMAGE_URL_KEY,
     accumulate_embeddings,
-    fetch_embeddings_from_encode_workers,
-    load_embeddings,
+    fetch_embeddings_via_local_cache,
+    fetch_embeddings_via_stream,
+    load_embedding,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,19 +102,18 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
         self._connector = connect.Connector()
         logger.info("Multimodal PD Worker async initialization completed.")
 
-    async def _build_request_from_frontend(
+    def _parse_frontend_request(
         self, raw_request: dict
-    ) -> vLLMMultimodalRequest:
-        """Convert a raw frontend dict into a vLLMMultimodalRequest.
+    ) -> tuple[vLLMMultimodalRequest, list[str]]:
+        """Parse a raw frontend dict into a vLLMMultimodalRequest and image URLs.
 
-        When the PD worker is the direct frontend endpoint (no separate
-        processor), the Rust frontend sends a dict representation of PreprocessedRequest.
-        This method extracts image URLs, routes them to encode workers if available,
-        and assembles the standard request object that the rest of ``generate()`` expects.
+        The Rust frontend sends a dict with ``token_ids`` and
+        ``multi_modal_data`` (containing image URLs). This method extracts
+        those fields into a structured request. No I/O is performed here;
+        embedding fetching is handled separately by ``_load_multimodal_data``.
         """
         request_id = str(uuid.uuid4().hex)
 
-        # Extract image URLs from the raw frontend dict
         image_urls: list[str] = []
         mm_data = raw_request.get("multi_modal_data")
         if mm_data is not None:
@@ -122,77 +121,75 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
                 if isinstance(item, dict) and "Url" in item:
                     image_urls.append(item["Url"])
 
-        multimodal_groups: list[MultiModalGroup] = []
-        if self.encode_worker_client and image_urls:
-            multimodal_groups = await fetch_embeddings_from_encode_workers(
-                self.encode_worker_client,
-                image_urls,
-                request_id,
-            )
-
         sampling_params = build_sampling_params(
             raw_request, self.default_sampling_params
         )
 
-        return vLLMMultimodalRequest(
+        request = vLLMMultimodalRequest(
             engine_prompt=PatchedTokensPrompt(
                 prompt_token_ids=raw_request["token_ids"]
             ),
             sampling_params=sampling_params,
             request_id=request_id,
-            multimodal_inputs=multimodal_groups,
         )
 
-    # ── Request parsing ────────────────────────────────────────────────
-
-    async def _parse_request(self, request) -> vLLMMultimodalRequest:
-        """Normalize any incoming format into a validated vLLMMultimodalRequest.
-
-        Handles three input shapes:
-        1. Raw frontend dict  (has ``token_ids`` + ``multi_modal_data``)
-        2. JSON string         (from encode worker or other serializers)
-        3. Plain dict          (Pydantic-compatible mapping)
-        """
-        if isinstance(request, dict) and "token_ids" in request:
-            return await self._build_request_from_frontend(request)
-
-        if type(request) is vLLMMultimodalRequest:
-            return request
-
-        if type(request) is str:
-            return vLLMMultimodalRequest.model_validate_json(request)
-
-        return vLLMMultimodalRequest.model_validate(request)
+        return request, image_urls
 
     # ── Multimodal data loading ──────────────────────────────────────
 
     async def _load_multimodal_data(
-        self, request: vLLMMultimodalRequest
+        self, image_urls: list[str], request_id: str
     ) -> dict[str, Any]:
-        """Load pre-computed embeddings into an engine-ready dict.
+        """Fetch embeddings from encode workers and load into an engine-ready dict.
 
-        Each ``MultiModalGroup`` carries embeddings from encode workers,
-        loaded via NIXL RDMA or local safetensors.
-
-        No-op when --route-to-encoder is not set.
+        Returns an empty dict when no encode worker is configured or no images
+        are present.
         """
-        multimodal_inputs: list[MultiModalGroup] = request.multimodal_inputs or []
         multi_modal_data: dict[str, Any] = defaultdict(list)
 
-        for mi in multimodal_inputs:
-            embeddings = await load_embeddings(
-                mi,
+        if not self.encode_worker_client or not image_urls:
+            return multi_modal_data
+
+        if self.embedding_cache_manager is not None:
+            multimodal_groups = await fetch_embeddings_via_local_cache(
+                self.embedding_cache_manager,
+                self.encode_worker_client,  # type: ignore[arg-type]
+                image_urls,
+                request_id,
                 self.EMBEDDINGS_DTYPE,
                 self.EMBEDDINGS_DEVICE,
                 self._connector,
             )
-            accumulate_embeddings(
-                multi_modal_data,
-                self.config.model,
-                self.EMBEDDINGS_DTYPE,
-                embeddings,
-                mi.image_grid_thw,
+        else:
+            multimodal_groups = await fetch_embeddings_via_stream(
+                self.encode_worker_client,
+                image_urls,
+                request_id,
             )
+
+        for mi in multimodal_groups:
+            if mi.cached_embedding is not None:
+                accumulate_embeddings(
+                    multi_modal_data,
+                    self.config.model,
+                    self.EMBEDDINGS_DTYPE,
+                    mi.cached_embedding,
+                    mi.image_grid_thw,
+                )
+            else:
+                embeddings = await load_embedding(
+                    mi,
+                    self.EMBEDDINGS_DTYPE,
+                    self.EMBEDDINGS_DEVICE,
+                    self._connector,
+                )
+                accumulate_embeddings(
+                    multi_modal_data,
+                    self.config.model,
+                    self.EMBEDDINGS_DTYPE,
+                    embeddings,
+                    mi.image_grid_thw,
+                )
 
         return multi_modal_data
 
@@ -203,14 +200,11 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
         request: vLLMMultimodalRequest,
         multi_modal_data: dict[str, Any],
     ) -> None:
-        """Attach model-specific metadata and strip heavy fields from request.
+        """Attach model-specific metadata to the request for the decode worker.
 
         For Qwen VL (mRoPE) models, captures image grid dimensions and
         embedding shapes so the decode worker can reconstruct
         ``multi_modal_data`` consistently for multiple images.
-
-        Also clears ``multimodal_inputs`` — the raw embeddings / URLs are no
-        longer needed once ``multi_modal_data`` is built.
         """
         if is_qwen_vl_model(self.config.model) and isinstance(
             multi_modal_data.get("image"), dict
@@ -227,11 +221,7 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
             if image_embeds is not None:
                 request.embeddings_shape = list(image_embeds.shape)
 
-        # Use empty list instead of None to satisfy Pydantic validation
-        # on decode worker after vllm upgrade.
-        request.multimodal_inputs = []
-
-        logger.info(f"Prepared multimodal data size: {len(multi_modal_data['image'])}")
+        logger.debug(f"Prepared multimodal data size: {len(multi_modal_data['image'])}")
         logger.debug("Multimodal data keys: %s", list(multi_modal_data.keys()))
 
     # ── Response serialization ───────────────────────────────────────
@@ -366,8 +356,7 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
         # Serialized request is lightweight: token IDs, sampling params with
         # kv_transfer_params, and small Qwen metadata (image_grid_thw,
         # embeddings_shape).  Heavy multimodal data was consumed locally by
-        # engine_client.generate() and multimodal_inputs was cleared by
-        # `_finalize_request_metadata`.
+        # engine_client.generate().
         async for (
             decode_response
         ) in await self.decode_worker_client.round_robin(  # type: ignore[union-attr]
@@ -378,20 +367,15 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
 
     # ── Public entry point ───────────────────────────────────────────
 
-    async def generate(self, request, context):
+    async def generate(self, raw_request: dict, context):
         """Parse the request, load multimodal data, and run inference."""
-        logger.debug(f"Got raw request: {request}")
-
-        request = await self._parse_request(request)
+        request, image_urls = self._parse_frontend_request(raw_request)
         logger.debug(f"Received PD request: {{ id: {request.request_id} }}.")
 
-        multi_modal_data = await self._load_multimodal_data(request)
-        self._finalize_request_metadata(request, multi_modal_data)
-
-        logger.info(
-            f"Prepared multimodal data size: {len(multi_modal_data.get('image', []))}"
+        multi_modal_data = await self._load_multimodal_data(
+            image_urls, request.request_id
         )
-        logger.debug(f"{multi_modal_data}")
+        self._finalize_request_metadata(request, multi_modal_data)
 
         if self.enable_disagg and self.decode_worker_client:
             async for chunk in self._generate_disagg(request, multi_modal_data):

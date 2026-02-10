@@ -236,6 +236,19 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
                 )
             if image_embeds is not None:
                 request.embeddings_shape = list(image_embeds.shape)
+            if image_grid_thw is not None:
+                thw = (
+                    image_grid_thw.tolist()
+                    if isinstance(image_grid_thw, torch.Tensor)
+                    else image_grid_thw
+                )
+                grids = thw if thw and isinstance(thw[0], (list, tuple)) else [thw]
+                per_image_tokens = [int(t * h * w) // 4 for t, h, w in grids]
+                logger.info(
+                    "Image tokens: total=%s, per_image=%s",
+                    sum(per_image_tokens),
+                    per_image_tokens,
+                )
 
         image_data = multi_modal_data.get("image")
         if image_data is not None:

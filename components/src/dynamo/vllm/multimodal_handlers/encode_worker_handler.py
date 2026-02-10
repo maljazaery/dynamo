@@ -186,6 +186,20 @@ class EncodeWorkerHandler:
                     logger.debug(f"image embedding shape: {embeddings.shape}")
                     splitted_embeddings = embeddings.cpu()
 
+                # Log image token counts for all models (from embedding shapes)
+                if isinstance(splitted_embeddings, (list, tuple)):
+                    per_image_tokens = [int(t.shape[0]) for t in splitted_embeddings]
+                else:
+                    # Single tensor with batch dim: (n_images, seq_len, dim)
+                    n_images = splitted_embeddings.shape[0]
+                    seq_len = splitted_embeddings.shape[1]
+                    per_image_tokens = [seq_len] * n_images
+                logger.info(
+                    "Image tokens: total=%s, per_image=%s",
+                    sum(per_image_tokens),
+                    per_image_tokens,
+                )
+
                 image_grid_thw = (
                     image_embeds["image_grid_thw"].tolist()
                     if "image_grid_thw" in image_embeds

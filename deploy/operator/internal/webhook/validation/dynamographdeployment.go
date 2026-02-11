@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
 	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1alpha1"
@@ -356,6 +357,17 @@ func (v *DynamoGraphDeploymentValidator) validateAnnotations() error {
 		if _, err := semver.NewVersion(value); err != nil {
 			errs = append(errs, fmt.Errorf("annotation %s has invalid value %q: must be valid semver",
 				consts.KubeAnnotationDynamoOperatorOriginVersion, value))
+		}
+	}
+
+	// Validate vLLM distributed executor backend override
+	if value, exists := annotations[consts.KubeAnnotationVLLMDistributedExecutorBackend]; exists {
+		switch strings.ToLower(value) {
+		case "mp", "ray":
+			// valid
+		default:
+			errs = append(errs, fmt.Errorf("annotation %s has invalid value %q: must be \"mp\" or \"ray\"",
+				consts.KubeAnnotationVLLMDistributedExecutorBackend, value))
 		}
 	}
 

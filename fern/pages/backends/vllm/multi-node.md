@@ -94,3 +94,92 @@ python -m dynamo.vllm \
   --enforce-eager \
   --is-prefill-worker
 ```
+
+### Multi-node Tensor/Pipeline Parallelism
+
+When the total world size (`tensor_parallel_size × pipeline_parallel_size`) exceeds the number of GPUs on a single node, you need to span vLLM across multiple machines. This uses vLLM's native multiprocessing (`mp`) backend with the `--headless` flag for worker nodes.
+
+This applies whenever `TP × PP > GPUs on a single node` — for example, TP=16 across two 8-GPU nodes, or TP=8 with PP=2 across two 8-GPU nodes.
+
+**How it works:**
+- The **head node** (node-rank 0) runs the full `dynamo.vllm` process with the Dynamo frontend, engine core, and scheduler
+- **Worker nodes** run `dynamo.vllm --headless`, which launches vLLM workers only — no Dynamo endpoints, no NATS/etcd connections
+- All nodes coordinate via `torch.distributed` using the `mp` backend
+
+**Infrastructure requirements:**
+- The head node still needs NATS and etcd for the Dynamo frontend
+- Worker nodes only need network connectivity to the head node for `torch.distributed`
+- The model must be downloaded on all nodes (each node loads weights locally)
+
+For more details on vLLM's multi-node multiprocessing, see the
+[vLLM parallelism docs](https://docs.vllm.ai/en/stable/serving/parallelism_scaling/?h=#running-vllm-with-multiprocessing).
+
+#### Example: TP=16 across 2× 8-GPU nodes
+
+Pure tensor parallelism spanning two nodes:
+
+**Node 1 (Head Node)**: Run ingress and vLLM engine
+```bash
+# Start ingress
+python -m dynamo.frontend --router-mode kv &
+
+# Start vLLM head (node-rank 0)
+python -m dynamo.vllm \
+  --model meta-llama/Llama-3.3-70B-Instruct \
+  --tensor-parallel-size 16 \
+  --distributed-executor-backend mp \
+  --nnodes 2 \
+  --node-rank 0 \
+  --master-addr ${HEAD_NODE_IP} \
+  --master-port 29500 \
+  --enforce-eager
+```
+
+**Node 2 (Worker)**: Run headless vLLM worker
+```bash
+python -m dynamo.vllm --headless \
+  --model meta-llama/Llama-3.3-70B-Instruct \
+  --tensor-parallel-size 16 \
+  --distributed-executor-backend mp \
+  --nnodes 2 \
+  --node-rank 1 \
+  --master-addr ${HEAD_NODE_IP} \
+  --master-port 29500 \
+  --enforce-eager
+```
+
+#### Example: TP=8, PP=2 across 2× 8-GPU nodes
+
+Pipeline parallelism across nodes with tensor parallelism within each node:
+
+**Node 1 (Head Node)**: Run ingress and vLLM engine
+```bash
+# Start ingress
+python -m dynamo.frontend --router-mode kv &
+
+# Start vLLM head (node-rank 0)
+python -m dynamo.vllm \
+  --model meta-llama/Llama-3.3-70B-Instruct \
+  --tensor-parallel-size 8 \
+  --pipeline-parallel-size 2 \
+  --distributed-executor-backend mp \
+  --nnodes 2 \
+  --node-rank 0 \
+  --master-addr ${HEAD_NODE_IP} \
+  --master-port 29500 \
+  --enforce-eager
+```
+
+**Node 2 (Worker)**: Run headless vLLM worker
+```bash
+python -m dynamo.vllm --headless \
+  --model meta-llama/Llama-3.3-70B-Instruct \
+  --tensor-parallel-size 8 \
+  --pipeline-parallel-size 2 \
+  --distributed-executor-backend mp \
+  --nnodes 2 \
+  --node-rank 1 \
+  --master-addr ${HEAD_NODE_IP} \
+  --master-port 29500 \
+  --enforce-eager
+```

@@ -10,10 +10,6 @@ from typing import Optional
 
 import uvloop
 from prometheus_client import REGISTRY, CollectorRegistry, multiprocess
-from vllm.distributed.kv_events import ZmqEventPublisher
-from vllm.usage.usage_lib import UsageContext
-from vllm.v1.engine.async_llm import AsyncLLM
-from vllm.v1.metrics.prometheus import setup_multiprocess_prometheus
 
 from dynamo.common.config_dump import dump_config
 from dynamo.common.utils.endpoint_types import parse_endpoint_types
@@ -27,6 +23,11 @@ from dynamo.llm import (
     fetch_llm,
     register_llm,
 )
+from vllm.distributed.kv_events import ZmqEventPublisher
+from vllm.entrypoints.cli.serve import run_headless
+from vllm.usage.usage_lib import UsageContext
+from vllm.v1.engine.async_llm import AsyncLLM
+from vllm.v1.metrics.prometheus import setup_multiprocess_prometheus
 
 # Optional imports for frontend decoding support
 try:
@@ -131,8 +132,28 @@ async def graceful_shutdown(runtime, shutdown_event):
     logging.info("DistributedRuntime shutdown complete")
 
 
+def run_dynamo_headless(args):
+    """Run in headless mode by delegating to vLLM's run_headless().
+
+    For secondary nodes (node_rank_within_dp > 0): spawns MultiprocExecutor
+    workers only (no engine core, no scheduler, no endpoints).
+
+    For head node (node_rank_within_dp == 0): creates engine cores via
+    CoreEngineProcManager without an API server.
+
+    Bypasses DistributedRuntime entirely — headless workers don't need
+    NATS, etcd, or dynamo endpoints.
+    """
+    # run_headless checks api_server_count; set default since dynamo's
+    # parser doesn't include this serving-only arg.
+    if not hasattr(args, "api_server_count"):
+        args.api_server_count = 0
+
+    run_headless(args)
+
+
 async def worker():
-    config = parse_args()
+    config, raw_args = parse_args()
 
     loop = asyncio.get_running_loop()
     overwrite_args(config)
@@ -178,6 +199,18 @@ async def worker():
     # that path (ideally via a shared folder).
     if not os.path.exists(config.model):
         await fetch_llm(config.model)
+
+    # Headless mode: bypass DistributedRuntime entirely.
+    # Workers run vLLM only (no NATS, etcd, or dynamo endpoints).
+    if config.headless:
+        if is_checkpoint_mode:
+            raise ValueError(
+                "--headless is incompatible with checkpoint mode "
+                "(DYN_CHECKPOINT_SIGNAL_FILE is set) as checkpoint modedoes not support multi-node. "
+                "Remove --headless or unset DYN_CHECKPOINT_SIGNAL_FILE."
+            )
+        run_dynamo_headless(raw_args)
+        return
 
     # CHECKPOINT MODE: Load engine BEFORE runtime creation
     # This allows checkpointing GPU state before runtime connections are established

@@ -48,7 +48,7 @@ def test_custom_jinja_template_valid_path(mock_vllm_cli):
     """Test that valid absolute path is stored correctly."""
     mock_vllm_cli(model="Qwen/Qwen3-0.6B", custom_jinja_template=JINJA_TEMPLATE_PATH)
 
-    config = parse_args()
+    config, _ = parse_args()
 
     assert config.custom_jinja_template == JINJA_TEMPLATE_PATH, (
         f"Expected custom_jinja_template value to be {JINJA_TEMPLATE_PATH}, "
@@ -64,7 +64,7 @@ def test_custom_jinja_template_env_var_expansion(monkeypatch, mock_vllm_cli):
     cli_path = "$JINJA_DIR/custom_template.jinja"
     mock_vllm_cli(model="Qwen/Qwen3-0.6B", custom_jinja_template=cli_path)
 
-    config = parse_args()
+    config, _ = parse_args()
 
     assert "$JINJA_DIR" not in config.custom_jinja_template
     assert config.custom_jinja_template == JINJA_TEMPLATE_PATH, (

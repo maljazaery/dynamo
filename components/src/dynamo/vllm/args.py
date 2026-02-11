@@ -5,7 +5,8 @@
 import logging
 import os
 import socket
-from typing import Any, Dict, Optional
+from argparse import Namespace
+from typing import Any, Dict, Optional, Tuple
 
 from vllm.config import KVTransferConfig
 from vllm.distributed.kv_events import KVEventsConfig
@@ -96,6 +97,9 @@ class Config:
     # Whether to enable NATS for KV events (derived from kv_events_config in overwrite_args)
     use_kv_events: bool = False
 
+    # Headless mode for multi-node TP/PP
+    headless: bool = False
+
     def has_connector(self, connector_name: str) -> bool:
         """
         Check if a specific connector is enabled.
@@ -115,11 +119,13 @@ def _preprocess_for_encode_config(config: Config) -> Dict[str, Any]:
     return config.__dict__
 
 
-def parse_args() -> Config:
+def parse_args() -> Tuple[Config, Namespace]:
     """Parse command-line arguments for the vLLM backend.
 
     Returns:
-        Config: Parsed configuration object.
+        Tuple of (Config, raw argparse Namespace).  The raw namespace is
+        needed for ``--headless`` mode, which passes it through to vLLM's
+        ``run_headless()``.
     """
     parser = FlexibleArgumentParser(
         description="vLLM server integrated with Dynamo LLM."
@@ -308,6 +314,14 @@ def parse_args() -> Config:
         choices=[1, 2, 3],
         help="Sleep mode level (1=offload to CPU, 2=discard weights, 3=discard all). Default: 1",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=False,
+        help="Run in headless mode for multi-node TP/PP. "
+        "Secondary nodes run vLLM workers only, no dynamo endpoints. "
+        "See vLLM multi-node data parallel documentation for more details.",
+    )
     add_config_dump_args(parser)
 
     parser = AsyncEngineArgs.add_cli_args(parser)
@@ -455,6 +469,7 @@ def parse_args() -> Config:
     config.enable_local_indexer = args.enable_local_indexer
     config.use_vllm_tokenizer = args.use_vllm_tokenizer
     config.sleep_mode_level = args.sleep_mode_level
+    config.headless = args.headless
     # use_kv_events is set later in overwrite_args() based on kv_events_config
 
     # Validate custom Jinja template file exists if provided
@@ -507,7 +522,7 @@ def parse_args() -> Config:
 
     config.dump_config_to = args.dump_config_to
 
-    return config
+    return config, args
 
 
 def create_kv_events_config(config: Config) -> Optional[KVEventsConfig]:

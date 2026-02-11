@@ -154,18 +154,45 @@ class TestParseFrontendRequest:
 
 class TestLoadMultimodalData:
     @pytest.mark.asyncio
-    async def test_no_encode_client_returns_empty(self):
-        """Without encode client -> returns empty dict."""
+    async def test_no_encode_client_loads_images_locally(self):
+        """Without encode client -> loads images via ImageLoader (agg EPD)."""
         handler = _make_handler(encode_worker_client=None)
+        fake_image = MagicMock(name="PIL.Image")
+        handler.image_loader = MagicMock()
+        handler.image_loader.load_image = AsyncMock(return_value=fake_image)
+
         result = await handler._load_multimodal_data(["http://img.png"], "req-1")
-        assert dict(result) == {}
+
+        handler.image_loader.load_image.assert_awaited_once_with("http://img.png")
+        assert result == {"image": fake_image}
+
+    @pytest.mark.asyncio
+    async def test_no_encode_client_multiple_images(self):
+        """Without encode client, multiple images -> returns list."""
+        handler = _make_handler(encode_worker_client=None)
+        img_a, img_b = MagicMock(name="img_a"), MagicMock(name="img_b")
+        handler.image_loader = MagicMock()
+        handler.image_loader.load_image = AsyncMock(side_effect=[img_a, img_b])
+
+        result = await handler._load_multimodal_data(
+            ["http://a.png", "http://b.png"], "req-1"
+        )
+
+        assert result == {"image": [img_a, img_b]}
 
     @pytest.mark.asyncio
     async def test_no_images_returns_empty(self):
-        """With encode client but no images -> returns empty dict."""
+        """No image URLs -> returns empty dict regardless of encode client."""
         handler = _make_handler(encode_worker_client=MagicMock())
         result = await handler._load_multimodal_data([], "req-1")
-        assert dict(result) == {}
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_no_images_no_encode_client_returns_empty(self):
+        """No image URLs and no encode client -> returns empty dict."""
+        handler = _make_handler(encode_worker_client=None)
+        result = await handler._load_multimodal_data([], "req-1")
+        assert result == {}
 
     @pytest.mark.asyncio
     async def test_with_encode_worker_calls_fetch(self):
@@ -274,6 +301,34 @@ class TestGenerateAgg:
         assert len(chunks) == 1
         assert chunks[0]["token_ids"] == [10, 11]
         assert chunks[0]["finish_reason"] == "stop"
+
+    @pytest.mark.asyncio
+    async def test_empty_mm_data_passes_none(self):
+        """_generate_agg passes multi_modal_data=None for text-only requests."""
+        handler = _make_handler()
+        request = _make_vllm_request()
+        engine_resp = _make_engine_response()
+        output = MagicMock()
+        output.token_ids = [10]
+        output.finish_reason = "stop"
+        output.stop_reason = None
+        engine_resp.outputs = [output]
+
+        captured_prompt = {}
+
+        async def fake_generate(**kwargs):
+            captured_prompt.update(kwargs)
+            yield engine_resp
+
+        handler.engine_client = MagicMock()
+        handler.engine_client.generate = fake_generate
+
+        chunks = []
+        async for chunk in handler._generate_agg(request, {}):
+            chunks.append(chunk)
+
+        prompt = captured_prompt["prompt"]
+        assert prompt.get("multi_modal_data") is None
 
 
 class TestGenerateDisagg:

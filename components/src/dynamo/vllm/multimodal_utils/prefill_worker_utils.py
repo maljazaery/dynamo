@@ -220,11 +220,10 @@ async def fetch_embeddings_via_local_cache(
         else:
             uncached.append((idx, url, key))
 
+    hits = len(image_urls) - len(uncached)
+    misses = len(uncached)
+
     if uncached:
-        logger.info(
-            f"[{request_id}] Cache miss for {len(uncached)}/{len(image_urls)} URLs, "
-            "fetching from encode workers"
-        )
         miss_urls = [url for _, url, _ in uncached]
         groups = await fetch_embeddings_via_stream(
             encode_worker_client,
@@ -247,7 +246,15 @@ async def fetch_embeddings_via_local_cache(
             )
             group.cached_embedding = embedding
             results[idx] = group
-    else:
-        logger.info(f"[{request_id}] All {len(image_urls)} URLs served from cache")
+
+    stats = cache.stats
+    logger.info(
+        f"[{request_id}] Embedding cache: "
+        f"request hits={hits} misses={misses}, "
+        f"cumulative hit_rate={stats['hit_rate']:.2%} "
+        f"(hits={stats['hits']} misses={stats['misses']} "
+        f"entries={stats['entries']} "
+        f"mem={stats['current_bytes'] / 1024**2:.1f}MB)"
+    )
 
     return [r for r in results if r is not None]

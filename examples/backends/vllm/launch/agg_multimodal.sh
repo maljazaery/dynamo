@@ -16,6 +16,8 @@ trap 'echo Cleaning up...; kill 0' EXIT
 
 # Default values
 MODEL_NAME="Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
+# Multimodal embedding cache: not set = disabled (0). Set via --multimodal-embedding-cache-capacity-gb to enable.
+CACHE_ARGS=""
 
 # Parse command line arguments
 # Extra arguments are passed through to the vLLM worker
@@ -26,14 +28,27 @@ while [[ $# -gt 0 ]]; do
             MODEL_NAME=$2
             shift 2
             ;;
+        --multimodal-embedding-cache-capacity-gb)
+            if [[ -n "${2:-}" && "$2" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                CACHE_ARGS="--multimodal-embedding-cache-capacity-gb $2"
+                echo "Embedding cache enabled: $2 GB (ec_both mode)"
+                shift 2
+            else
+                echo "ERROR: --multimodal-embedding-cache-capacity-gb requires a positive number (GB)." >&2
+                exit 1
+            fi
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS] [-- EXTRA_VLLM_ARGS]"
             echo "Options:"
             echo "  --model <model_name>   Specify the VLM model to use (default: $MODEL_NAME)"
+            echo "  --multimodal-embedding-cache-capacity-gb <gb>  Enable embedding cache, capacity in GB (default: disabled)"
             echo "  -h, --help             Show this help message"
             echo ""
             echo "Any additional arguments are passed through to the vLLM worker."
-            echo "Example: $0 --model Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 --dyn-tool-call-parser hermes"
+            echo "Examples:"
+            echo "  $0 --model Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 --dyn-tool-call-parser hermes"
+            echo "  $0 --model Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 --multimodal-embedding-cache-capacity-gb 2"
             exit 0
             ;;
         *)
@@ -54,22 +69,15 @@ python -m dynamo.frontend &
 
 # Configure GPU memory optimization for specific models (if no extra args override)
 MODEL_SPECIFIC_ARGS="--gpu-memory-utilization 0.85 --max-model-len 16384"
-if [[ "$MODEL_NAME" == "Qwen/Qwen2.5-VL-7B-Instruct" ]]; then
-    MODEL_SPECIFIC_ARGS="--gpu-memory-utilization 0.85 --max-model-len 4096"
-elif [[ "$MODEL_NAME" == "llava-hf/llava-1.5-7b-hf" ]]; then
+if [[ "$MODEL_NAME" == "llava-hf/llava-1.5-7b-hf" ]]; then
     MODEL_SPECIFIC_ARGS="--gpu-memory-utilization 0.85 --max-model-len 4096"
 elif [[ "$MODEL_NAME" == "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8" ]]; then
     MODEL_SPECIFIC_ARGS="--tensor-parallel-size=8 --gpu-memory-utilization 0.85 --max-model-len=108960"
 fi
 
-# Start vLLM worker with vision model
-# Multimodal data (images) are decoded in the backend worker using ImageLoader
-# --enforce-eager: Quick deployment (remove for production)
-# --connector none: No KV transfer needed for aggregated serving
-# Extra args from command line come last to allow overrides
-CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} \
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-2} \
 DYN_SYSTEM_PORT=${DYN_SYSTEM_PORT:-8081} \
-    python -m dynamo.vllm --enable-multimodal --model $MODEL_NAME --connector none $MODEL_SPECIFIC_ARGS "${EXTRA_ARGS[@]}"
+    python -m dynamo.vllm --enable-multimodal --multimodal-worker --model $MODEL_NAME --connector none $MODEL_SPECIFIC_ARGS $CACHE_ARGS "${EXTRA_ARGS[@]}"
 
 # Wait for all background processes to complete
 wait

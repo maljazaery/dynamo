@@ -132,8 +132,8 @@ func shouldUseMpBackend(annotations map[string]string) bool {
 // Leader: runs the original vLLM command with --distributed-executor-backend mp,
 // --nnodes, --node-rank 0, --master-addr, --master-port
 //
-// Worker: runs the same vLLM command with --headless (no API server),
-// --node-rank <rank>, and the same coordination flags
+// Worker: waits for leader's master port to be listening (TCP port-wait loop),
+// then runs the same vLLM command with --node-rank <rank> and the same coordination flags
 func injectMpDistributedLaunchFlags(container *corev1.Container, role Role, serviceName string, multinodeDeployer MultinodeDeployer, numberOfNodes int32) {
 	leaderHostname := multinodeDeployer.GetLeaderHostname(serviceName)
 	mpFlags := fmt.Sprintf("--distributed-executor-backend mp --nnodes %d --master-addr %s --master-port %s",
@@ -145,12 +145,35 @@ func injectMpDistributedLaunchFlags(container *corev1.Container, role Role, serv
 	case RoleLeader:
 		mpFlags += " --node-rank 0"
 	case RoleWorker:
-		nodeRank, shellNeeded := multinodeDeployer.GetNodeRank()
-		needsShell = shellNeeded
+		nodeRank, _ := multinodeDeployer.GetNodeRank()
+		needsShell = true // Always need shell for port-wait loop
 		mpFlags += fmt.Sprintf(" --node-rank %s", nodeRank)
 	}
 
 	injectFlagsIntoContainerCommand(container, mpFlags, needsShell, "vllm")
+
+	// For workers, prepend a port-wait loop to ensure the leader's master port
+	// is listening before starting vLLM distributed init.
+	if role == RoleWorker {
+		injectMpWorkerPortWait(container, leaderHostname)
+	}
+}
+
+// injectMpWorkerPortWait prepends a TCP port-wait loop to the worker container command.
+// The worker waits until the leader's master port (used by PyTorch TCPStore for distributed init)
+// is accepting connections before starting the vLLM process.
+// Uses Python's socket module since nc/netcat may not be available in the container image.
+func injectMpWorkerPortWait(container *corev1.Container, leaderHostname string) {
+	if len(container.Args) == 0 {
+		return
+	}
+
+	waitPrefix := fmt.Sprintf(
+		`echo 'Waiting for leader master port at %s:%s...' && until python3 -c 'import socket; s=socket.create_connection(("%s", %s), timeout=2); s.close()' 2>/dev/null; do sleep 2; done && echo 'Leader master port ready' && `,
+		leaderHostname, commonconsts.VLLMMpMasterPort, leaderHostname, commonconsts.VLLMMpMasterPort,
+	)
+
+	container.Args[0] = waitPrefix + container.Args[0]
 }
 
 func injectRayDistributedLaunchFlags(container *corev1.Container, role Role, serviceName string, multinodeDeployer MultinodeDeployer) {

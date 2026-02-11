@@ -12,6 +12,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// mpWorkerWaitPrefix returns the expected port-wait loop prefix for mp worker commands in tests.
+func mpWorkerWaitPrefix(leaderHostname string) string {
+	return fmt.Sprintf(
+		`echo 'Waiting for leader master port at %s:%s...' && until python3 -c 'import socket; s=socket.create_connection(("%s", %s), timeout=2); s.close()' 2>/dev/null; do sleep 2; done && echo 'Leader master port ready' && `,
+		leaderHostname, commonconsts.VLLMMpMasterPort, leaderHostname, commonconsts.VLLMMpMasterPort,
+	)
+}
+
 func TestVLLMBackend_UpdateContainer(t *testing.T) {
 	backend := &VLLMBackend{}
 
@@ -117,7 +125,7 @@ func TestVLLMBackend_UpdateContainer(t *testing.T) {
 			multinodeDeployer: &GroveMultinodeDeployer{},
 			initialContainer:  &corev1.Container{Command: []string{"python3"}, Args: []string{"-m", "dynamo.vllm", tensorParallelSizeFlag, "16"}},
 			gpuCount:          8,
-			expectedArgs: []string{fmt.Sprintf(
+			expectedArgs: []string{mpWorkerWaitPrefix("$(GROVE_PCSG_NAME)-$(GROVE_PCSG_INDEX)-test-service-ldr-0.$(GROVE_HEADLESS_SERVICE)") + fmt.Sprintf(
 				"exec python3 -m dynamo.vllm %s 16 --distributed-executor-backend mp --nnodes 2 --master-addr $(GROVE_PCSG_NAME)-$(GROVE_PCSG_INDEX)-test-service-ldr-0.$(GROVE_HEADLESS_SERVICE) --master-port %s --node-rank $((GROVE_PCLQ_POD_INDEX + 1))",
 				tensorParallelSizeFlag, commonconsts.VLLMMpMasterPort)},
 			expectProbesRemoved: true,
@@ -426,7 +434,7 @@ func TestUpdateVLLMMultinodeArgs(t *testing.T) {
 			annotations: map[string]string{
 				commonconsts.KubeAnnotationDynamoOperatorOriginVersion: "1.0.0",
 			},
-			expectedArgs: []string{fmt.Sprintf(
+			expectedArgs: []string{mpWorkerWaitPrefix("$(GROVE_PCSG_NAME)-$(GROVE_PCSG_INDEX)-test-service-ldr-0.$(GROVE_HEADLESS_SERVICE)") + fmt.Sprintf(
 				"exec python3 -m dynamo.vllm %s 16 --distributed-executor-backend mp --nnodes 2 --master-addr $(GROVE_PCSG_NAME)-$(GROVE_PCSG_INDEX)-test-service-ldr-0.$(GROVE_HEADLESS_SERVICE) --master-port %s --node-rank $((GROVE_PCLQ_POD_INDEX + 1))",
 				tensorParallelSizeFlag, commonconsts.VLLMMpMasterPort)},
 		},
@@ -439,7 +447,7 @@ func TestUpdateVLLMMultinodeArgs(t *testing.T) {
 			annotations: map[string]string{
 				commonconsts.KubeAnnotationDynamoOperatorOriginVersion: "1.0.0",
 			},
-			expectedArgs: []string{fmt.Sprintf(
+			expectedArgs: []string{mpWorkerWaitPrefix("$LWS_LEADER_ADDRESS") + fmt.Sprintf(
 				"exec python3 -m dynamo.vllm %s 16 --distributed-executor-backend mp --nnodes 2 --master-addr $LWS_LEADER_ADDRESS --master-port %s --node-rank $(LWS_WORKER_INDEX)",
 				tensorParallelSizeFlag, commonconsts.VLLMMpMasterPort)},
 		},

@@ -7,8 +7,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/externalrestore"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/server"
 )
 
 // ConfigMapPath is the default path where the ConfigMap is mounted.
@@ -16,8 +16,8 @@ const ConfigMapPath = "/etc/chrek/config.yaml"
 
 // FullConfig is the root configuration structure loaded from the ConfigMap.
 type FullConfig struct {
-	Agent      AgentConfig               `yaml:"agent"`
-	Checkpoint checkpoint.CheckpointSpec `yaml:"checkpoint"`
+	Agent      AgentConfig          `yaml:"agent"`
+	Checkpoint config.CheckpointSpec `yaml:"checkpoint"`
 }
 
 // AgentConfig holds the runtime configuration for the checkpoint agent daemon.
@@ -81,7 +81,7 @@ func (c *AgentConfig) loadEnvOverrides() {
 
 func (c *FullConfig) applyDefaults() {
 	if c.Agent.SocketPath == "" {
-		c.Agent.SocketPath = externalrestore.DefaultSocketPath
+		c.Agent.SocketPath = server.DefaultSocketPath
 	}
 }
 

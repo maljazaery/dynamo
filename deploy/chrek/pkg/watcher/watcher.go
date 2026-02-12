@@ -23,32 +23,28 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/externalrestore"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/server"
 )
 
-// WatcherConfig holds watcher configuration.
-type WatcherConfig struct {
+// Config holds watcher configuration.
+type Config struct {
 	NodeName            string
-	RestrictedNamespace string // Optional: restrict watching to this namespace (empty = cluster-wide)
-	AgentSocketPath     string // Pod-local UDS socket path exposed by the chrek API server.
-
-	// Checkpoint configuration (from ConfigMap)
-	CheckpointSpec *checkpoint.CheckpointSpec
+	RestrictedNamespace string
+	AgentSocketPath     string
+	CheckpointSpec      *config.CheckpointSpec
 }
 
 // Watcher watches for pods with checkpoint/restore labels and triggers operations.
-// All state tracking is done via pod annotations for idempotency across agent restarts.
 type Watcher struct {
-	config          WatcherConfig
+	config          Config
 	clientset       kubernetes.Interface
-	agentClient     *externalrestore.Client
-	discoveryClient *checkpoint.DiscoveryClient
+	agentClient     *server.Client
+	discoveryClient *containerd.DiscoveryClient
 	log             logr.Logger
 
-	// In-flight guards prevent concurrent operations on the same pod within
-	// a single agent lifetime. NOT used for cross-restart idempotency —
-	// that comes from pod annotations.
 	inFlight   map[string]struct{}
 	inFlightMu sync.Mutex
 
@@ -56,8 +52,7 @@ type Watcher struct {
 }
 
 // NewWatcher creates a new pod watcher.
-func NewWatcher(cfg WatcherConfig, discoveryClient *checkpoint.DiscoveryClient, log logr.Logger) (*Watcher, error) {
-	// Create in-cluster Kubernetes client
+func NewWatcher(cfg Config, discoveryClient *containerd.DiscoveryClient, log logr.Logger) (*Watcher, error) {
 	restConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
@@ -75,7 +70,7 @@ func NewWatcher(cfg WatcherConfig, discoveryClient *checkpoint.DiscoveryClient, 
 	return &Watcher{
 		config:          cfg,
 		clientset:       clientset,
-		agentClient:     externalrestore.NewClient(cfg.AgentSocketPath),
+		agentClient:     server.NewClient(cfg.AgentSocketPath),
 		discoveryClient: discoveryClient,
 		log:             log,
 		inFlight:        make(map[string]struct{}),
@@ -91,13 +86,12 @@ func (w *Watcher) Start(ctx context.Context) error {
 
 	w.log.Info("Starting pod watcher",
 		"node", w.config.NodeName,
-		"checkpoint", checkpoint.KubeLabelIsCheckpointSource,
-		"restore", checkpoint.KubeLabelIsRestoreTarget,
+		"checkpoint", config.KubeLabelIsCheckpointSource,
+		"restore", config.KubeLabelIsRestoreTarget,
 		"restore_enabled", w.agentClient != nil,
 		"socket_path", w.config.AgentSocketPath,
 	)
 
-	// Namespace restriction options shared across informer factories
 	var nsOptions []informers.SharedInformerOption
 	if w.config.RestrictedNamespace != "" {
 		w.log.Info("Restricting pod watching to namespace", "namespace", w.config.RestrictedNamespace)
@@ -108,9 +102,9 @@ func (w *Watcher) Start(ctx context.Context) error {
 
 	var syncFuncs []cache.InformerSynced
 
-	// --- Checkpoint informer: watches pods with checkpoint-source=true ---
+	// Checkpoint informer
 	checkpointSelector := labels.SelectorFromSet(labels.Set{
-		checkpoint.KubeLabelIsCheckpointSource: "true",
+		config.KubeLabelIsCheckpointSource: "true",
 	}).String()
 
 	ckptFactoryOpts := append([]informers.SharedInformerOption{
@@ -135,10 +129,10 @@ func (w *Watcher) Start(ctx context.Context) error {
 	go ckptFactory.Start(w.stopCh)
 	syncFuncs = append(syncFuncs, ckptInformer.HasSynced)
 
-	// --- Restore informer: watches pods with checkpoint-restore=true ---
+	// Restore informer
 	if w.agentClient != nil {
 		restoreSelector := labels.SelectorFromSet(labels.Set{
-			checkpoint.KubeLabelIsRestoreTarget: "true",
+			config.KubeLabelIsRestoreTarget: "true",
 		}).String()
 
 		restoreFactoryOpts := append([]informers.SharedInformerOption{
@@ -164,27 +158,21 @@ func (w *Watcher) Start(ctx context.Context) error {
 		syncFuncs = append(syncFuncs, restoreInformer.HasSynced)
 	}
 
-	// Wait for all caches to sync
 	if !cache.WaitForCacheSync(w.stopCh, syncFuncs...) {
 		return fmt.Errorf("failed to sync informer caches")
 	}
 
 	w.log.Info("Pod watcher started and caches synced")
-
-	// Wait for context cancellation
 	<-ctx.Done()
 	close(w.stopCh)
-
 	return nil
 }
 
-// Stop stops the watcher
+// Stop stops the watcher.
 func (w *Watcher) Stop() {
 	close(w.stopCh)
 }
 
-// handleCheckpointPodEvent processes a checkpoint pod event.
-// Idempotency: reads nvidia.com/checkpoint-status annotation to avoid re-checkpointing.
 func (w *Watcher) handleCheckpointPodEvent(ctx context.Context, pod *corev1.Pod) {
 	if pod.Spec.NodeName != w.config.NodeName {
 		return
@@ -195,19 +183,17 @@ func (w *Watcher) handleCheckpointPodEvent(ctx context.Context, pod *corev1.Pod)
 
 	podKey := fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
 
-	checkpointHash, ok := pod.Labels[checkpoint.KubeLabelCheckpointHash]
+	checkpointHash, ok := pod.Labels[config.KubeLabelCheckpointHash]
 	if !ok || checkpointHash == "" {
 		w.log.Info("Pod has checkpoint label but no checkpoint-hash label", "pod", podKey)
 		return
 	}
 
-	// Pod annotation is the source of truth — survives agent restarts.
-	annotationStatus := pod.Annotations[checkpoint.KubeAnnotationCheckpointStatus]
+	annotationStatus := pod.Annotations[config.KubeAnnotationCheckpointStatus]
 	if annotationStatus == "completed" || annotationStatus == "in_progress" {
 		return
 	}
 
-	// In-flight guard prevents concurrent operations within this agent lifetime.
 	if !w.tryAcquire(podKey) {
 		return
 	}
@@ -218,28 +204,22 @@ func (w *Watcher) handleCheckpointPodEvent(ctx context.Context, pod *corev1.Pod)
 	go w.doCheckpoint(ctx, pod, checkpointHash, podKey)
 }
 
-// isPodRunning checks if the pod phase is Running (containers started).
 func (w *Watcher) isPodRunning(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodRunning
 }
 
-// isPodReady checks if all containers in the pod are ready
 func (w *Watcher) isPodReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning {
 		return false
 	}
-
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 			return true
 		}
 	}
-
 	return false
 }
 
-// handleRestorePodEvent processes a restore pod event.
-// Idempotency: reads nvidia.com/restore-status annotation to avoid re-restoring.
 func (w *Watcher) handleRestorePodEvent(ctx context.Context, pod *corev1.Pod) {
 	if pod.Spec.NodeName != w.config.NodeName {
 		return
@@ -251,26 +231,22 @@ func (w *Watcher) handleRestorePodEvent(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 
-	// Pod annotation is the source of truth — survives agent restarts.
-	annotationStatus := pod.Annotations[checkpoint.KubeAnnotationRestoreStatus]
+	annotationStatus := pod.Annotations[config.KubeAnnotationRestoreStatus]
 
-	// Once restored and serving, readiness flips to true and re-triggers are skipped.
 	if w.isPodReady(pod) {
 		return
 	}
 
-	// Terminal states: don't retry completed or failed restores.
 	if annotationStatus == "completed" || annotationStatus == "in_progress" || annotationStatus == "failed" {
 		return
 	}
 
-	checkpointHash, ok := pod.Labels[checkpoint.KubeLabelCheckpointHash]
+	checkpointHash, ok := pod.Labels[config.KubeLabelCheckpointHash]
 	if !ok || checkpointHash == "" {
 		w.log.Info("Restore pod has no checkpoint-hash label", "pod", podKey)
 		return
 	}
 
-	// Verify checkpoint is ready on disk: directory exists without tmp_ prefix.
 	checkpointDir := filepath.Join(w.config.CheckpointSpec.BasePath, checkpointHash)
 	if _, err := os.Stat(checkpointDir); os.IsNotExist(err) {
 		w.log.V(1).Info("Checkpoint not ready on disk, skipping restore", "pod", podKey, "checkpoint_hash", checkpointHash)
@@ -287,16 +263,13 @@ func (w *Watcher) handleRestorePodEvent(ctx context.Context, pod *corev1.Pod) {
 	go w.doRestore(ctx, pod, checkpointHash, podKey)
 }
 
-// doRestore performs external restore by calling the local chrek UDS API.
-// Annotates the pod with restore status for cross-restart idempotency.
 func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash, podKey string) {
 	defer w.release(podKey)
 
 	log := w.log.WithValues("pod", podKey, "checkpoint_hash", checkpointHash)
 
-	// Mark in_progress on the pod before starting work.
 	if err := w.annotatePod(ctx, pod, map[string]string{
-		checkpoint.KubeAnnotationRestoreStatus: "in_progress",
+		config.KubeAnnotationRestoreStatus: "in_progress",
 	}); err != nil {
 		log.Error(err, "Failed to annotate pod with restore in_progress")
 		return
@@ -306,7 +279,7 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		err := fmt.Errorf("agent UDS client is not configured")
 		log.Error(err, "External restore failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
 		return
 	}
 
@@ -315,11 +288,11 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		err := fmt.Errorf("no containers found in pod spec")
 		log.Error(err, "Restore failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
 		return
 	}
 
-	req := externalrestore.RestoreAPIRequest{
+	req := orchestrate.RestoreAPIRequest{
 		CheckpointHash: checkpointHash,
 		PodName:        pod.Name,
 		PodNamespace:   pod.Namespace,
@@ -330,7 +303,7 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 	if err != nil {
 		log.Error(err, "External restore failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
 		return
 	}
 
@@ -344,38 +317,35 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 	if err != nil {
 		log.Error(err, "Failed to resolve placeholder host PID for watcher signaling")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
 		return
 	}
 
 	if err := w.sendSignalViaPIDNamespace(placeholderHostPID, result.RestoredPID, syscall.SIGUSR2, "restore complete"); err != nil {
 		log.Error(err, "Failed to signal restored runtime process")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
 		return
 	}
 
 	if err := w.waitForPodReady(ctx, pod.Namespace, pod.Name, containerName); err != nil {
 		log.Error(err, "Restore post-signal readiness check failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
 		return
 	}
 
 	w.emitPodEvent(ctx, pod, corev1.EventTypeNormal, "RestoreSucceeded", fmt.Sprintf("Restore completed from checkpoint %s", checkpointHash))
-	w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "completed"})
+	w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "completed"})
 }
 
-// doCheckpoint performs the checkpoint and signals the runtime directly.
-// Annotates the pod with checkpoint status for cross-restart idempotency.
 func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointHash, podKey string) {
 	defer w.release(podKey)
 
 	log := w.log.WithValues("pod", podKey, "checkpoint_hash", checkpointHash)
 
-	// Mark in_progress on the pod before starting work.
 	if err := w.annotatePod(ctx, pod, map[string]string{
-		checkpoint.KubeAnnotationCheckpointStatus: "in_progress",
+		config.KubeAnnotationCheckpointStatus: "in_progress",
 	}); err != nil {
 		log.Error(err, "Failed to annotate pod with checkpoint in_progress")
 		return
@@ -385,13 +355,12 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		err := fmt.Errorf("agent UDS client is not configured")
 		log.Error(err, "Checkpoint failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
 		return
 	}
 
 	containerName := resolveMainContainerName(pod)
 
-	// Get container ID from status
 	var containerID string
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == containerName {
@@ -406,7 +375,7 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 	if containerID == "" {
 		log.Info("Could not find container ID")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", "Could not resolve target container ID")
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
 		return
 	}
 
@@ -416,18 +385,18 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 	if err != nil {
 		log.Error(err, "Failed to resolve container")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", fmt.Sprintf("Container resolve failed: %v", err))
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
 		return
 	}
 
 	if w.config.CheckpointSpec == nil {
 		log.Info("CheckpointSpec is nil - cannot perform checkpoint")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", "CheckpointSpec is nil")
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
 		return
 	}
 
-	req := externalrestore.CheckpointAPIRequest{
+	req := server.CheckpointAPIRequest{
 		ContainerID:    containerID,
 		ContainerName:  containerName,
 		CheckpointHash: checkpointHash,
@@ -442,7 +411,7 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		if signalErr := w.sendSignalToPID(containerPID, syscall.SIGTERM, "checkpoint failed"); signalErr != nil {
 			log.Error(signalErr, "Failed to signal checkpoint failure to runtime process")
 		}
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
 		return
 	}
 
@@ -458,11 +427,11 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 	if err := w.sendSignalToPID(containerPID, syscall.SIGUSR1, "checkpoint complete"); err != nil {
 		log.Error(err, "Failed to signal checkpoint completion to runtime process")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "failed"})
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
 		return
 	}
 
-	w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationCheckpointStatus: "completed"})
+	w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "completed"})
 }
 
 func (w *Watcher) sendSignalToPID(pid int, sig syscall.Signal, reason string) error {
@@ -498,12 +467,7 @@ func (w *Watcher) sendSignalViaPIDNamespace(referenceHostPID, targetNamespacePID
 	if err != nil {
 		return fmt.Errorf(
 			"failed to signal namespace PID %d via reference host PID %d with signal %d (%s): %w (output: %s)",
-			targetNamespacePID,
-			referenceHostPID,
-			int(sig),
-			reason,
-			err,
-			strings.TrimSpace(string(output)),
+			targetNamespacePID, referenceHostPID, int(sig), reason, err, strings.TrimSpace(string(output)),
 		)
 	}
 
@@ -514,93 +478,6 @@ func (w *Watcher) sendSignalViaPIDNamespace(referenceHostPID, targetNamespacePID
 		"reason", reason,
 	)
 	return nil
-}
-
-func (w *Watcher) resolveHostPIDForRestoredProcess(ctx context.Context, pod *corev1.Pod, containerName string, restoredNamespacePID int) (int, error) {
-	placeholderHostPID, _, err := w.discoveryClient.ResolveContainerByPod(ctx, pod.Name, pod.Namespace, containerName)
-	if err != nil {
-		return 0, fmt.Errorf("failed to resolve placeholder host PID: %w", err)
-	}
-	hostPID, err := resolveHostPIDInSameNamespace(placeholderHostPID, restoredNamespacePID)
-	if err != nil {
-		return 0, fmt.Errorf("failed to map restored namespace PID %d to host PID: %w", restoredNamespacePID, err)
-	}
-	return hostPID, nil
-}
-
-func resolveHostPIDInSameNamespace(referenceHostPID, targetNamespacePID int) (int, error) {
-	if referenceHostPID <= 0 {
-		return 0, fmt.Errorf("invalid reference host PID %d", referenceHostPID)
-	}
-	if targetNamespacePID <= 0 {
-		return 0, fmt.Errorf("invalid target namespace PID %d", targetNamespacePID)
-	}
-
-	referenceMountNS, err := os.Readlink(fmt.Sprintf("%s/%d/ns/mnt", checkpoint.HostProcPath, referenceHostPID))
-	if err != nil {
-		return 0, fmt.Errorf("failed to read reference mount namespace for host PID %d: %w", referenceHostPID, err)
-	}
-	referencePIDNS, err := os.Readlink(fmt.Sprintf("%s/%d/ns/pid", checkpoint.HostProcPath, referenceHostPID))
-	if err != nil {
-		return 0, fmt.Errorf("failed to read reference PID namespace for host PID %d: %w", referenceHostPID, err)
-	}
-
-	entries, err := os.ReadDir(checkpoint.HostProcPath)
-	if err != nil {
-		return 0, fmt.Errorf("failed to list host proc entries: %w", err)
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		hostPID, err := strconv.Atoi(entry.Name())
-		if err != nil {
-			continue
-		}
-
-		mountNSPath := fmt.Sprintf("%s/%d/ns/mnt", checkpoint.HostProcPath, hostPID)
-		mountNS, err := os.Readlink(mountNSPath)
-		if err != nil || mountNS != referenceMountNS {
-			continue
-		}
-
-		namespacePID, err := readInnermostNamespacePID(hostPID)
-		if err != nil {
-			continue
-		}
-		if namespacePID == targetNamespacePID {
-			return hostPID, nil
-		}
-	}
-
-	return 0, fmt.Errorf(
-		"no host PID found for namespace PID %d in mount namespace %s (reference PID namespace %s)",
-		targetNamespacePID,
-		referenceMountNS,
-		referencePIDNS,
-	)
-}
-
-func readInnermostNamespacePID(hostPID int) (int, error) {
-	statusPath := fmt.Sprintf("%s/%d/status", checkpoint.HostProcPath, hostPID)
-	data, err := os.ReadFile(statusPath)
-	if err != nil {
-		return 0, err
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "NSpid:") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			return 0, fmt.Errorf("malformed NSpid line in %s", statusPath)
-		}
-		return strconv.Atoi(fields[len(fields)-1])
-	}
-
-	return 0, fmt.Errorf("NSpid not found in %s", statusPath)
 }
 
 func (w *Watcher) waitForPodReady(ctx context.Context, namespace, podName, containerName string) error {
@@ -626,11 +503,8 @@ func (w *Watcher) waitForPodReady(ctx context.Context, namespace, podName, conta
 			if cs.State.Terminated != nil {
 				return fmt.Errorf(
 					"restore pod %s/%s container %s terminated: reason=%s exitCode=%d",
-					namespace,
-					podName,
-					containerName,
-					cs.State.Terminated.Reason,
-					cs.State.Terminated.ExitCode,
+					namespace, podName, containerName,
+					cs.State.Terminated.Reason, cs.State.Terminated.ExitCode,
 				)
 			}
 		}
@@ -643,7 +517,6 @@ func (w *Watcher) waitForPodReady(ctx context.Context, namespace, podName, conta
 	}
 }
 
-// tryAcquire claims the in-flight slot for podKey. Returns false if already held.
 func (w *Watcher) tryAcquire(podKey string) bool {
 	w.inFlightMu.Lock()
 	defer w.inFlightMu.Unlock()
@@ -654,14 +527,12 @@ func (w *Watcher) tryAcquire(podKey string) bool {
 	return true
 }
 
-// release frees the in-flight slot for podKey.
 func (w *Watcher) release(podKey string) {
 	w.inFlightMu.Lock()
 	defer w.inFlightMu.Unlock()
 	delete(w.inFlight, podKey)
 }
 
-// annotatePod merges the given annotations onto the pod via the Kubernetes API.
 func (w *Watcher) annotatePod(ctx context.Context, pod *corev1.Pod, annotations map[string]string) error {
 	patch := fmt.Sprintf(`{"metadata":{"annotations":{`)
 	first := true
@@ -686,7 +557,6 @@ func (w *Watcher) annotatePod(ctx context.Context, pod *corev1.Pod, annotations 
 	return err
 }
 
-// resolveMainContainerName picks the "main" container or falls back to the first one.
 func resolveMainContainerName(pod *corev1.Pod) string {
 	containerName := ""
 	for _, c := range pod.Spec.Containers {

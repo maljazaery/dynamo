@@ -1,5 +1,6 @@
-// constants.go defines shared constants used across checkpoint and restore packages.
-package checkpoint
+// Package config defines shared constants, configuration types, and settings
+// used across all chrek packages.
+package config
 
 const (
 	// HostProcPath is the mount point for the host's /proc in DaemonSet pods.
@@ -9,26 +10,20 @@ const (
 	DevShmDirName = "dev-shm"
 
 	// KubeLabelIsCheckpointSource is the pod label that triggers automatic checkpointing.
-	// Set by the operator on checkpoint-eligible pods.
 	KubeLabelIsCheckpointSource = "nvidia.com/chrek-is-checkpoint-source"
 
 	// KubeLabelCheckpointHash is the pod label specifying the checkpoint identity hash.
-	// Set by the operator on checkpoint-eligible pods. Also used as the DynamoCheckpoint
-	// CR name, so it doubles as the CR lookup key.
 	KubeLabelCheckpointHash = "nvidia.com/chrek-checkpoint-hash"
 
 	// KubeLabelIsRestoreTarget is the pod label that triggers automatic restore.
-	// Set by the operator on restore-eligible (placeholder) pods.
 	KubeLabelIsRestoreTarget = "nvidia.com/chrek-is-restore-target"
 
-	// KubeAnnotationCheckpointStatus is set on checkpoint-source pods by the watcher
-	// to track checkpoint progress. Values: "in_progress", "completed", "failed".
-	// Persists across agent restarts for idempotent checkpoint operations.
+	// KubeAnnotationCheckpointStatus tracks checkpoint progress on source pods.
+	// Values: "in_progress", "completed", "failed".
 	KubeAnnotationCheckpointStatus = "nvidia.com/chrek-checkpoint-status"
 
-	// KubeAnnotationRestoreStatus is set on restore-target (placeholder) pods by the
-	// watcher to track restore progress. Values: "in_progress", "completed", "failed".
-	// Persists across agent restarts for idempotent restore operations.
+	// KubeAnnotationRestoreStatus tracks restore progress on target pods.
+	// Values: "in_progress", "completed", "failed".
 	KubeAnnotationRestoreStatus = "nvidia.com/chrek-restore-status"
 
 	// DumpLogFilename is the CRIU dump (checkpoint) log filename.

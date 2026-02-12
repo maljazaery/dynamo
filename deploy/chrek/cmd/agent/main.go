@@ -18,8 +18,10 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/externalrestore"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/server"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/watcher"
 )
 
@@ -35,17 +37,16 @@ func main() {
 		fatal(agentLog, err, "Invalid configuration")
 	}
 
-	discoveryClient, err := checkpoint.NewDiscoveryClient()
+	discoveryClient, err := containerd.NewDiscoveryClient()
 	if err != nil {
 		fatal(agentLog, err, "Failed to create discovery client")
 	}
 	defer discoveryClient.Close()
 
-	checkpointer := checkpoint.NewCheckpointer(discoveryClient, rootLog.WithName("checkpointer"))
+	checkpointer := orchestrate.NewCheckpointer(discoveryClient, rootLog.WithName("checkpointer"))
 
-	// Create the external restorer
-	restorer := externalrestore.NewRestorer(
-		externalrestore.RestorerConfig{
+	restorer := orchestrate.NewRestorer(
+		orchestrate.RestorerConfig{
 			CheckpointBasePath: cfg.Checkpoint.BasePath,
 			CRIUSettings:       &cfg.Checkpoint.CRIU,
 		},
@@ -53,15 +54,13 @@ func main() {
 		rootLog.WithName("restorer"),
 	)
 
-	// Create UDS server
-	serverCfg := externalrestore.ServerConfig{
+	serverCfg := server.Config{
 		SocketPath:     cfg.Agent.SocketPath,
 		NodeName:       cfg.Agent.NodeName,
 		CheckpointSpec: &cfg.Checkpoint,
 	}
-	srv := externalrestore.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
+	srv := server.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
 
-	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -76,9 +75,8 @@ func main() {
 		"watch_namespace", cfg.Agent.RestrictedNamespace,
 	)
 
-	// Start optional watcher alongside UDS server
 	if cfg.Agent.EnableWatcher {
-		watcherCfg := watcher.WatcherConfig{
+		watcherCfg := watcher.Config{
 			NodeName:            cfg.Agent.NodeName,
 			RestrictedNamespace: cfg.Agent.RestrictedNamespace,
 			AgentSocketPath:     cfg.Agent.SocketPath,
@@ -89,14 +87,13 @@ func main() {
 			fatal(agentLog, err, "Failed to create pod watcher")
 		}
 		go func() {
-			agentLog.Info("Pod watcher started", "label", checkpoint.KubeLabelIsCheckpointSource)
+			agentLog.Info("Pod watcher started", "label", config.KubeLabelIsCheckpointSource)
 			if err := podWatcher.Start(ctx); err != nil {
 				agentLog.Error(err, "Pod watcher exited")
 			}
 		}()
 	}
 
-	// Handle graceful shutdown
 	go func() {
 		<-sigChan
 		agentLog.Info("Shutting down")
@@ -108,7 +105,6 @@ func main() {
 		}
 	}()
 
-	// Start UDS server (blocks until shutdown)
 	if err := srv.Start(); err != nil && err != http.ErrServerClosed {
 		fatal(agentLog, err, "Server error")
 	}
@@ -148,7 +144,6 @@ func configureLogging() logr.Logger {
 	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
 	zapLog, err := zapCfg.Build()
 	if err != nil {
-		// Fall back to a basic development logger if config fails
 		zapLog, _ = zap.NewDevelopment()
 	}
 

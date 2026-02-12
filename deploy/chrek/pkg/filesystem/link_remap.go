@@ -1,4 +1,4 @@
-package externalrestore
+package filesystem
 
 import (
 	"encoding/binary"
@@ -26,7 +26,9 @@ type remapEntry struct {
 	remapID uint32
 }
 
-func createLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) error {
+// CreateLinkRemapStubs creates placeholder files for CRIU link_remap entries.
+// These stubs must exist in the target rootfs before CRIU restore.
+func CreateLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) error {
 	remapPath := filepath.Join(checkpointPath, "remap-fpath.img")
 	remaps, err := parseRemapFpath(remapPath)
 	if err != nil {
@@ -80,7 +82,7 @@ func createLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) er
 			continue
 		}
 
-		if err := createLinkRemapStub(hostPath, remapMode); err != nil {
+		if err := createStub(hostPath, remapMode); err != nil {
 			log.Error(err, "Failed to create link_remap stub", "stub", hostPath, "target", origInfo.name)
 			continue
 		}
@@ -91,6 +93,19 @@ func createLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) er
 		log.Info("Created link_remap stubs", "count", created)
 	}
 	return nil
+}
+
+func createStub(path string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(make([]byte, 32))
+	return err
 }
 
 func parseRemapFpath(path string) ([]remapEntry, error) {
@@ -238,17 +253,4 @@ func parseFilesImgWithMode(path string) (map[uint32]fileInfo, error) {
 		}
 	}
 	return fileMap, nil
-}
-
-func createLinkRemapStub(path string, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(make([]byte, 32))
-	return err
 }

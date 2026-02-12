@@ -1,7 +1,4 @@
-// restore.go orchestrates external restore from the DaemonSet.
-// All operations happen externally: rootfs replay via /host/proc/<PID>/root,
-// CRIU restore via nsenter + criu-helper, CUDA restore via cuda-checkpoint.
-package externalrestore
+package orchestrate
 
 import (
 	"bufio"
@@ -12,17 +9,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
-	"syscall"
-
-	"golang.org/x/sys/unix"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/go-logr/logr"
 
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/filesystem"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
 )
 
 const (
@@ -32,26 +33,25 @@ const (
 	// RestoreLogFilename is the CRIU restore log filename.
 	RestoreLogFilename = "restore.log"
 
-	// Max number of helper output lines to retain for error reporting.
 	maxCRIUHelperOutputLines = 400
 )
 
 // RestorerConfig holds configuration for the external restore orchestrator.
 type RestorerConfig struct {
-	CheckpointBasePath string                  // Base path for checkpoint storage (PVC mount)
-	CRIUHelperPath     string                  // Path to criu-helper binary (default: CRIUHelperBinary)
-	CRIUSettings       *checkpoint.CRIUSettings // CRIU settings from ConfigMap (restore-specific options)
+	CheckpointBasePath string
+	CRIUHelperPath     string
+	CRIUSettings       *config.CRIUSettings
 }
 
 // Restorer orchestrates external restore operations from the DaemonSet.
 type Restorer struct {
 	cfg             RestorerConfig
-	discoveryClient *checkpoint.DiscoveryClient
+	discoveryClient *containerd.DiscoveryClient
 	log             logr.Logger
 }
 
 // NewRestorer creates a new external restore orchestrator.
-func NewRestorer(cfg RestorerConfig, discoveryClient *checkpoint.DiscoveryClient, log logr.Logger) *Restorer {
+func NewRestorer(cfg RestorerConfig, discoveryClient *containerd.DiscoveryClient, log logr.Logger) *Restorer {
 	if cfg.CRIUHelperPath == "" {
 		cfg.CRIUHelperPath = CRIUHelperBinary
 	}
@@ -60,6 +60,23 @@ func NewRestorer(cfg RestorerConfig, discoveryClient *checkpoint.DiscoveryClient
 		discoveryClient: discoveryClient,
 		log:             log,
 	}
+}
+
+// RestoreAPIRequest is the JSON body for POST /restore.
+type RestoreAPIRequest struct {
+	CheckpointHash string `json:"checkpoint_hash"`
+	PodName        string `json:"pod_name"`
+	PodNamespace   string `json:"pod_namespace"`
+	ContainerName  string `json:"container_name"`
+}
+
+// RestoreAPIResponse is the JSON response for POST /restore.
+type RestoreAPIResponse struct {
+	Success         bool     `json:"success"`
+	RestoredPID     int      `json:"restored_pid,omitempty"`
+	RestoredHostPID int      `json:"restored_host_pid,omitempty"`
+	CompletedSteps  []string `json:"completed_steps,omitempty"`
+	Error           string   `json:"error,omitempty"`
 }
 
 // Restore performs external restore for the given request.
@@ -74,13 +91,11 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*Restore
 
 	checkpointPath := filepath.Join(r.cfg.CheckpointBasePath, req.CheckpointHash)
 
-	// Load checkpoint manifest
-	manifest, err := checkpoint.ReadCheckpointManifest(checkpointPath)
+	m, err := manifest.Read(checkpointPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read checkpoint manifest: %w", err)
 	}
 
-	// Resolve the placeholder container to get its PID
 	containerName := req.ContainerName
 	if containerName == "" {
 		containerName = "main"
@@ -93,18 +108,18 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*Restore
 	r.log.Info("Resolved placeholder container", "pid", placeholderPID)
 
 	cudaDeviceMap := ""
-	if manifest.ExternalRestore != nil && manifest.ExternalRestore.CUDA != nil && len(manifest.ExternalRestore.CUDA.PIDs) > 0 {
-		if len(manifest.ExternalRestore.CUDA.SourceGPUUUIDs) == 0 {
+	if m.ExternalRestore != nil && m.ExternalRestore.CUDA != nil && len(m.ExternalRestore.CUDA.PIDs) > 0 {
+		if len(m.ExternalRestore.CUDA.SourceGPUUUIDs) == 0 {
 			return nil, fmt.Errorf("missing source GPU UUIDs in checkpoint manifest")
 		}
-		targetGPUUUIDs, err := checkpoint.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, containerName, r.log)
+		targetGPUUUIDs, err := cuda.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, containerName, r.log)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get target GPU UUIDs: %w", err)
 		}
 		if len(targetGPUUUIDs) == 0 {
 			return nil, fmt.Errorf("missing target GPU UUIDs for %s/%s container %s", req.PodNamespace, req.PodName, containerName)
 		}
-		cudaDeviceMap, err = checkpoint.BuildCUDADeviceMap(manifest.ExternalRestore.CUDA.SourceGPUUUIDs, targetGPUUUIDs)
+		cudaDeviceMap, err = cuda.BuildDeviceMap(m.ExternalRestore.CUDA.SourceGPUUUIDs, targetGPUUUIDs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build CUDA device map: %w", err)
 		}
@@ -112,25 +127,22 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*Restore
 
 	var completedSteps []string
 
-	// Step 1: Apply rootfs diff into placeholder rootfs via /host/proc/<PID>/root
-	targetRoot := fmt.Sprintf("%s/%d/root", checkpoint.HostProcPath, placeholderPID)
-	if err := applyRootfsDiff(checkpointPath, targetRoot, r.log); err != nil {
+	// Step 1: Apply rootfs diff
+	targetRoot := fmt.Sprintf("%s/%d/root", config.HostProcPath, placeholderPID)
+	if err := filesystem.ApplyRootfsDiff(checkpointPath, targetRoot, r.log); err != nil {
 		return nil, fmt.Errorf("rootfs diff failed: %w", err)
 	}
-	if err := applyDeletedFiles(checkpointPath, targetRoot, r.log); err != nil {
+	if err := filesystem.ApplyDeletedFiles(checkpointPath, targetRoot, r.log); err != nil {
 		r.log.Error(err, "Failed to apply deleted files")
 	}
 	completedSteps = append(completedSteps, "rootfs")
 
-	// Step 2: Restore /dev/shm into placeholder
-	if err := restoreDevShm(checkpointPath, targetRoot, r.log); err != nil {
+	// Step 2: Restore /dev/shm
+	if err := filesystem.RestoreDevShm(checkpointPath, targetRoot, r.log); err != nil {
 		r.log.Error(err, "Failed to restore /dev/shm")
 	}
 
-	// Step 2.5: Ensure /dev/net/tun exists in placeholder rootfs.
-	// CRIU needs this character device (major 10, minor 200) to restore TUN/TAP
-	// network devices. The unprivileged placeholder container doesn't have it,
-	// but the DaemonSet (running as root) can create it via /host/proc/<PID>/root.
+	// Step 2.5: Ensure /dev/net/tun exists in placeholder rootfs
 	tunPath := filepath.Join(targetRoot, "dev/net/tun")
 	if _, statErr := os.Stat(tunPath); os.IsNotExist(statErr) {
 		if err := os.MkdirAll(filepath.Dir(tunPath), 0755); err != nil {
@@ -142,29 +154,24 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*Restore
 		}
 	}
 
-	// Step 3: Create link_remap stubs in placeholder rootfs
-	if err := createLinkRemapStubs(checkpointPath, targetRoot, r.log); err != nil {
+	// Step 3: Create link_remap stubs
+	if err := filesystem.CreateLinkRemapStubs(checkpointPath, targetRoot, r.log); err != nil {
 		r.log.Error(err, "Failed to create link_remap stubs")
 	}
 
 	// Step 4: Execute nsenter + criu-helper
-	restoredPID, restoredHostPID, err := r.executeCRIURestore(ctx, placeholderPID, checkpointPath, manifest, cudaDeviceMap)
+	restoredPID, restoredHostPID, err := r.executeCRIURestore(ctx, placeholderPID, checkpointPath, m, cudaDeviceMap)
 	if err != nil {
 		return nil, fmt.Errorf("CRIU restore failed: %w", err)
 	}
 	completedSteps = append(completedSteps, "criu")
-	r.log.Info("CRIU restore completed",
-		"restored_pid", restoredPID,
-		"restored_host_pid", restoredHostPID,
-	)
+	r.log.Info("CRIU restore completed", "restored_pid", restoredPID, "restored_host_pid", restoredHostPID)
 
-	// Step 5: CUDA restore runs inside criu-helper after CRIU restore.
 	if cudaDeviceMap != "" {
 		completedSteps = append(completedSteps, "cuda")
 	}
 
-	// Step 6: Fail closed if the restored process already exited before we return.
-	// Ongoing health after this point is delegated to Kubernetes probes.
+	// Step 5: Validate restored process
 	procRoot := filepath.Join(targetRoot, "proc")
 	restoreLogPath := filepath.Join(targetRoot, "var", "criu-work", RestoreLogFilename)
 	if err := validateRestoredProcessState(procRoot, restoredPID); err != nil {
@@ -192,60 +199,67 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*Restore
 	}, nil
 }
 
-// executeCRIURestore runs criu-helper inside the placeholder's namespaces via nsenter.
-func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, checkpointPath string, manifest *checkpoint.CheckpointManifest, cudaDeviceMap string) (int, int, error) {
+func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, checkpointPath string, m *manifest.CheckpointManifest, cudaDeviceMap string) (int, int, error) {
 	pidStr := strconv.Itoa(placeholderPID)
 
-	// Build nsenter command for the namespaces CRIU restore needs.
-	// We intentionally do not enter the cgroup namespace when cgroup management is ignored.
-	args := []string{
+	baseArgs := []string{
 		"-t", pidStr,
-		"-m",
-		"-n",
-		"-p",
-		"-i",
-		"-u",
+		"-m", "-n", "-p", "-i", "-u",
 		"--", r.cfg.CRIUHelperPath,
 		"--checkpoint-path", checkpointPath,
 	}
 
-	// Pass CRIU settings from manifest
-	if manifest.CRIUDump.CRIU.WorkDir != "" {
-		args = append(args, "--work-dir", manifest.CRIUDump.CRIU.WorkDir)
+	if m.CRIUDump.CRIU.WorkDir != "" {
+		baseArgs = append(baseArgs, "--work-dir", m.CRIUDump.CRIU.WorkDir)
 	}
 	if cudaDeviceMap != "" {
-		args = append(args, "--cuda-device-map", cudaDeviceMap)
+		baseArgs = append(baseArgs, "--cuda-device-map", cudaDeviceMap)
 	}
+
+	restoreFlags := []string{}
 
 	// Pass restore-specific CRIU options from ConfigMap
 	if r.cfg.CRIUSettings != nil {
 		if r.cfg.CRIUSettings.RstSibling {
-			args = append(args, "--rst-sibling")
+			restoreFlags = append(restoreFlags, "--rst-sibling")
 		}
 		if r.cfg.CRIUSettings.MntnsCompatMode {
-			args = append(args, "--mntns-compat-mode")
+			restoreFlags = append(restoreFlags, "--mntns-compat-mode")
 		}
 		if r.cfg.CRIUSettings.EvasiveDevices {
-			args = append(args, "--evasive-devices")
+			restoreFlags = append(restoreFlags, "--evasive-devices")
 		}
 		if r.cfg.CRIUSettings.ForceIrmap {
-			args = append(args, "--force-irmap")
+			restoreFlags = append(restoreFlags, "--force-irmap")
 		}
 	}
 
+	args := append(append([]string{}, baseArgs...), restoreFlags...)
+	restoredPID, restoredHostPID, output, err := r.runCRIUHelper(ctx, args)
+	if err != nil && len(restoreFlags) > 0 && isUnsupportedCRIUHelperFlag(output, restoreFlags) {
+		r.log.Info("Retrying restore without unsupported optional criu-helper flags", "flags", strings.Join(restoreFlags, " "))
+		restoredPID, restoredHostPID, output, err = r.runCRIUHelper(ctx, baseArgs)
+	}
+	if err != nil {
+		return 0, 0, fmt.Errorf("nsenter + criu-helper failed: %w\noutput: %s", err, output)
+	}
+	return restoredPID, restoredHostPID, nil
+}
+
+func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, string, error) {
 	cmd := exec.CommandContext(ctx, "nsenter", args...)
 	r.log.V(1).Info("Executing nsenter + criu-helper", "cmd", cmd.String())
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to open criu-helper stdout pipe: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to open criu-helper stdout pipe: %w", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to open criu-helper stderr pipe: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to open criu-helper stderr pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return 0, 0, fmt.Errorf("failed to start nsenter + criu-helper: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to start nsenter + criu-helper: %w", err)
 	}
 
 	var (
@@ -335,7 +349,7 @@ func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, c
 
 	for pipeErr := range pipeErrCh {
 		if pipeErr != nil {
-			return 0, 0, pipeErr
+			return 0, 0, "", pipeErr
 		}
 	}
 
@@ -349,14 +363,27 @@ func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, c
 	mu.Unlock()
 
 	if waitErr != nil {
-		return 0, 0, fmt.Errorf("nsenter + criu-helper failed: %w\noutput: %s", waitErr, output)
+		return 0, 0, output, waitErr
 	}
 
 	if parsedRestoredPID > 0 {
-		return parsedRestoredPID, parsedRestoredHostPID, nil
+		return parsedRestoredPID, parsedRestoredHostPID, output, nil
 	}
 
-	return 0, 0, fmt.Errorf("criu-helper did not output RESTORED_PID; output: %s", output)
+	return 0, 0, output, fmt.Errorf("criu-helper did not output RESTORED_PID")
+}
+
+func isUnsupportedCRIUHelperFlag(output string, flags []string) bool {
+	if !strings.Contains(output, "flag provided but not defined") {
+		return false
+	}
+	for _, flag := range flags {
+		name := strings.TrimLeft(flag, "-")
+		if name != "" && strings.Contains(output, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Restorer) logCRIUHelperLine(line string) {
@@ -385,13 +412,10 @@ func (r *Restorer) logCRIUHelperLine(line string) {
 }
 
 func parseHelperLogLine(line string) (string, string, map[string]interface{}, bool) {
-	// Try zap development console format first (tab-delimited):
-	//   TIMESTAMP\tLEVEL\tLOGGER\tMESSAGE\t{json fields}
 	if level, msg, fields, ok := parseZapDevLine(line); ok {
 		return level, msg, fields, true
 	}
 
-	// Fall back to logfmt (key=value pairs).
 	if !strings.Contains(line, " level=") || !strings.Contains(line, " msg=") {
 		return "info", "", nil, false
 	}
@@ -412,7 +436,6 @@ func parseHelperLogLine(line string) (string, string, map[string]interface{}, bo
 
 		switch key {
 		case "time":
-			// Drop nested helper timestamp; outer log line already has one.
 		case "level":
 			level = strings.ToLower(strings.TrimSpace(value))
 		case "msg":
@@ -428,14 +451,8 @@ func parseHelperLogLine(line string) (string, string, map[string]interface{}, bo
 	return level, msg, fields, true
 }
 
-// parseZapDevLine parses zap's development console format:
-//
-//	TIMESTAMP\tLEVEL\tLOGGER\tMESSAGE[\t{json fields}]
-//
-// Returns level, message, parsed JSON fields, and whether parsing succeeded.
 func parseZapDevLine(line string) (string, string, map[string]interface{}, bool) {
 	parts := strings.Split(line, "\t")
-	// Need at least: timestamp, level, logger, message
 	if len(parts) < 4 {
 		return "", "", nil, false
 	}
@@ -444,7 +461,6 @@ func parseZapDevLine(line string) (string, string, map[string]interface{}, bool)
 	levelLower := strings.ToLower(level)
 	switch levelLower {
 	case "debug", "info", "warn", "warning", "error", "dpanic", "panic", "fatal":
-		// valid zap level
 	default:
 		return "", "", nil, false
 	}
@@ -454,7 +470,6 @@ func parseZapDevLine(line string) (string, string, map[string]interface{}, bool)
 		return "", "", nil, false
 	}
 
-	// Parse optional JSON structured fields from the 5th tab-separated segment
 	var fields map[string]interface{}
 	if len(parts) >= 5 {
 		jsonStr := strings.TrimSpace(parts[4])
@@ -500,136 +515,6 @@ func splitLogfmtTokens(line string) []string {
 		tokens = append(tokens, current.String())
 	}
 	return tokens
-}
-
-// applyRootfsDiff extracts rootfs-diff.tar into the target root.
-func applyRootfsDiff(checkpointPath, targetRoot string, log logr.Logger) error {
-	rootfsDiffPath := filepath.Join(checkpointPath, checkpoint.RootfsDiffFilename)
-	if _, err := os.Stat(rootfsDiffPath); os.IsNotExist(err) {
-		log.V(1).Info("No rootfs-diff.tar, skipping")
-		return nil
-	}
-
-	log.Info("Applying rootfs diff", "target", targetRoot)
-	cmd := exec.Command("tar", "--keep-old-files", "-C", targetRoot, "-xf", rootfsDiffPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		// tar exit codes 1-2 with --keep-old-files are non-fatal:
-		// 1 = "file changed as we read it" or general warnings
-		// 2 = "Cannot open: File exists" for read-only files
-		// Both are expected when extracting over an existing rootfs.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() <= 2 {
-			log.V(1).Info("Rootfs diff applied (some files skipped)", "exit_code", exitErr.ExitCode())
-			return nil
-		}
-		return fmt.Errorf("tar extract failed: %w", err)
-	}
-	return nil
-}
-
-// applyDeletedFiles removes files marked as deleted in the checkpoint.
-func applyDeletedFiles(checkpointPath, targetRoot string, log logr.Logger) error {
-	deletedFilesPath := filepath.Join(checkpointPath, checkpoint.DeletedFilesFilename)
-	data, err := os.ReadFile(deletedFilesPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("failed to read deleted files: %w", err)
-	}
-
-	var deletedFiles []string
-	if err := json.Unmarshal(data, &deletedFiles); err != nil {
-		return fmt.Errorf("failed to parse deleted files: %w", err)
-	}
-
-	count := 0
-	for _, f := range deletedFiles {
-		if f == "" {
-			continue
-		}
-		target := filepath.Join(targetRoot, f)
-		if _, err := os.Stat(target); os.IsNotExist(err) {
-			continue
-		}
-		if err := os.RemoveAll(target); err != nil {
-			log.V(1).Info("Could not delete file", "path", target, "error", err)
-			continue
-		}
-		count++
-	}
-	log.Info("Deleted files applied", "count", count)
-	return nil
-}
-
-// restoreDevShm restores /dev/shm files into the target root's /dev/shm.
-func restoreDevShm(checkpointPath, targetRoot string, log logr.Logger) error {
-	srcDir := filepath.Join(checkpointPath, checkpoint.DevShmDirName)
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to read dev-shm dir: %w", err)
-	}
-
-	destDir := filepath.Join(targetRoot, "dev", "shm")
-	if err := os.MkdirAll(destDir, 0777); err != nil {
-		return fmt.Errorf("failed to create target /dev/shm: %w", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		srcPath := filepath.Join(srcDir, entry.Name())
-		destPath := filepath.Join(destDir, entry.Name())
-
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		uid, gid := -1, -1
-		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-			uid = int(stat.Uid)
-			gid = int(stat.Gid)
-		}
-
-		src, err := os.Open(srcPath)
-		if err != nil {
-			continue
-		}
-
-		mode := info.Mode()
-		if mode == 0 {
-			mode = 0666
-		}
-		dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-		if err != nil {
-			src.Close()
-			continue
-		}
-
-		if _, err := io.Copy(dst, src); err != nil {
-			src.Close()
-			dst.Close()
-			continue
-		}
-		if uid >= 0 && gid >= 0 {
-			if err := dst.Chown(uid, gid); err != nil {
-				src.Close()
-				dst.Close()
-				continue
-			}
-		}
-		src.Close()
-		dst.Close()
-	}
-
-	log.V(1).Info("Restored /dev/shm files", "count", len(entries))
-	return nil
 }
 
 func validateRestoredProcessState(procRoot string, pid int) error {

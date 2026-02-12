@@ -1,5 +1,4 @@
-// storage.go provides checkpoint storage I/O: write/read manifests, listing, deletion.
-package checkpoint
+package manifest
 
 import (
 	"fmt"
@@ -8,16 +7,18 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 )
 
-// WriteCheckpointManifest writes a checkpoint manifest file in the checkpoint directory.
-func WriteCheckpointManifest(checkpointDir string, data *CheckpointManifest) error {
+// Write writes a checkpoint manifest file in the checkpoint directory.
+func Write(checkpointDir string, data *CheckpointManifest) error {
 	content, err := yaml.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal checkpoint manifest: %w", err)
 	}
 
-	manifestPath := filepath.Join(checkpointDir, CheckpointManifestFilename)
+	manifestPath := filepath.Join(checkpointDir, config.CheckpointManifestFilename)
 	if err := os.WriteFile(manifestPath, content, 0600); err != nil {
 		return fmt.Errorf("failed to write checkpoint manifest: %w", err)
 	}
@@ -25,9 +26,9 @@ func WriteCheckpointManifest(checkpointDir string, data *CheckpointManifest) err
 	return nil
 }
 
-// ReadCheckpointManifest reads checkpoint manifest from a checkpoint directory.
-func ReadCheckpointManifest(checkpointDir string) (*CheckpointManifest, error) {
-	manifestPath := filepath.Join(checkpointDir, CheckpointManifestFilename)
+// Read reads checkpoint manifest from a checkpoint directory.
+func Read(checkpointDir string) (*CheckpointManifest, error) {
+	manifestPath := filepath.Join(checkpointDir, config.CheckpointManifestFilename)
 
 	content, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -49,7 +50,7 @@ func SaveDescriptors(checkpointDir string, descriptors []string) error {
 		return fmt.Errorf("failed to marshal descriptors: %w", err)
 	}
 
-	descriptorsPath := filepath.Join(checkpointDir, DescriptorsFilename)
+	descriptorsPath := filepath.Join(checkpointDir, config.DescriptorsFilename)
 	if err := os.WriteFile(descriptorsPath, content, 0600); err != nil {
 		return fmt.Errorf("failed to write descriptors file: %w", err)
 	}
@@ -59,7 +60,7 @@ func SaveDescriptors(checkpointDir string, descriptors []string) error {
 
 // LoadDescriptors reads file descriptor information from checkpoint directory.
 func LoadDescriptors(checkpointDir string) ([]string, error) {
-	descriptorsPath := filepath.Join(checkpointDir, DescriptorsFilename)
+	descriptorsPath := filepath.Join(checkpointDir, config.DescriptorsFilename)
 
 	content, err := os.ReadFile(descriptorsPath)
 	if err != nil {
@@ -75,7 +76,6 @@ func LoadDescriptors(checkpointDir string) ([]string, error) {
 }
 
 // ListCheckpoints returns all completed checkpoint IDs in the base directory.
-// Directories with the tmp_ prefix are in-progress and excluded.
 func ListCheckpoints(baseDir string) ([]string, error) {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
@@ -84,11 +84,11 @@ func ListCheckpoints(baseDir string) ([]string, error) {
 
 	var checkpoints []string
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == TmpCheckpointDir {
+		if !entry.IsDir() || entry.Name() == config.TmpCheckpointDir {
 			continue
 		}
 
-		manifestPath := filepath.Join(baseDir, entry.Name(), CheckpointManifestFilename)
+		manifestPath := filepath.Join(baseDir, entry.Name(), config.CheckpointManifestFilename)
 		if _, err := os.Stat(manifestPath); err == nil {
 			checkpoints = append(checkpoints, entry.Name())
 		}
@@ -100,7 +100,6 @@ func ListCheckpoints(baseDir string) ([]string, error) {
 // DeleteCheckpoint removes a checkpoint directory.
 func DeleteCheckpoint(baseDir, checkpointHash string) error {
 	checkpointDir := filepath.Join(baseDir, checkpointHash)
-	// Ensure resolved path is within baseDir to prevent path traversal
 	absBase, _ := filepath.Abs(baseDir)
 	absDir, _ := filepath.Abs(checkpointDir)
 	if !strings.HasPrefix(absDir, absBase+string(filepath.Separator)) && absDir != absBase {

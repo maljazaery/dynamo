@@ -315,11 +315,7 @@ func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, 
 				continue
 			}
 
-			if stream == "stderr" {
-				r.log.Info(line, "source", "criu-helper", "stream", "stderr")
-				continue
-			}
-			r.logCRIUHelperLine(line)
+			r.logCRIUHelperLine(line, stream)
 		}
 		if scanErr := scanner.Err(); scanErr != nil {
 			return fmt.Errorf("failed to read criu-helper %s: %w", stream, scanErr)
@@ -383,28 +379,60 @@ func isUnsupportedCRIUHelperFlag(output string, flags []string) bool {
 	return false
 }
 
-func (r *Restorer) logCRIUHelperLine(line string) {
+func (r *Restorer) logCRIUHelperLine(line, stream string) {
 	level, message, fields, ok := parseHelperLogLine(line)
 	if !ok {
-		r.log.Info(line, "source", "criu-helper")
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		kv := map[string]interface{}{"source": "criu-helper", "stream": stream}
+		encoded, err := json.Marshal(kv)
+		if err != nil {
+			encoded = []byte(`{"source":"criu-helper"}`)
+		}
+		fmt.Fprintf(os.Stdout, "%s\tINFO\trestorer\torchestrate/restore.go:0\t%s\t%s\n", ts, line, string(encoded))
 		return
 	}
-
-	keysAndValues := make([]interface{}, 0, len(fields)*2+2)
-	keysAndValues = append(keysAndValues, "source", "criu-helper")
-	for key, value := range fields {
-		keysAndValues = append(keysAndValues, key, value)
+	helperTime := ""
+	if fields != nil {
+		if raw, exists := fields["helper_time"]; exists {
+			if s, ok := raw.(string); ok {
+				helperTime = strings.TrimSpace(s)
+			}
+			delete(fields, "helper_time")
+		}
+	} else {
+		fields = map[string]interface{}{}
 	}
+	if helperTime == "" {
+		helperTime = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	fields["source"] = "criu-helper"
+	if stream == "stderr" {
+		fields["stream"] = stream
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		encoded = []byte(`{"source":"criu-helper"}`)
+	}
+	fmt.Fprintf(
+		os.Stdout,
+		"%s\t%s\trestorer\torchestrate/restore.go:0\t%s\t%s\n",
+		helperTime,
+		zapLevel(level),
+		message,
+		string(encoded),
+	)
+}
 
-	switch level {
+func zapLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "trace", "debug":
-		r.log.V(1).Info(message, keysAndValues...)
+		return "DEBUG"
 	case "warn", "warning":
-		r.log.Info(message, keysAndValues...)
-	case "error", "fatal", "panic":
-		r.log.Error(fmt.Errorf("%s", message), "criu-helper message", keysAndValues...)
+		return "WARN"
+	case "error", "fatal", "panic", "dpanic":
+		return "ERROR"
 	default:
-		r.log.Info(message, keysAndValues...)
+		return "INFO"
 	}
 }
 
@@ -433,6 +461,9 @@ func parseHelperLogLine(line string) (string, string, map[string]interface{}, bo
 
 		switch key {
 		case "time":
+			if strings.TrimSpace(value) != "" {
+				fields["helper_time"] = strings.TrimSpace(value)
+			}
 		case "level":
 			level = strings.ToLower(strings.TrimSpace(value))
 		case "msg":
@@ -476,6 +507,12 @@ func parseZapDevLine(line string) (string, string, map[string]interface{}, bool)
 				fields = parsed
 			}
 		}
+	}
+	if strings.TrimSpace(parts[0]) != "" {
+		if fields == nil {
+			fields = map[string]interface{}{}
+		}
+		fields["helper_time"] = strings.TrimSpace(parts[0])
 	}
 
 	return levelLower, msg, fields, true

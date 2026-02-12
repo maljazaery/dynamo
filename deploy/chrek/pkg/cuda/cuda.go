@@ -124,9 +124,9 @@ func UnlockProcesses(ctx context.Context, pids []int, log logr.Logger) {
 	}
 }
 
-// RestoreInNamespace performs CUDA restore from inside the container namespace
+// Restore performs CUDA restore from inside the container namespace
 // (called by ns-restore-runner). Uses process tree walking instead of cgroup discovery.
-func RestoreInNamespace(ctx context.Context, m *manifest.CheckpointManifest, restoredPID int, deviceMap string, log logr.Logger) error {
+func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID int, deviceMap string, log logr.Logger) error {
 	if m.ExternalRestore == nil || m.ExternalRestore.CUDA == nil || len(m.ExternalRestore.CUDA.PIDs) == 0 {
 		log.Info("Checkpoint does not contain CUDA metadata, skipping cuda-checkpoint restore")
 		return nil

@@ -139,7 +139,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	}
 	log.Info("CRIU restore completed", "pid", notify.restoredPID, "duration", time.Since(restoreStart))
 
-	if err := cuda.RestoreInNamespace(ctx, m, int(notify.restoredPID), opts.CUDADeviceMap, log); err != nil {
+	if err := cuda.Restore(ctx, m, int(notify.restoredPID), opts.CUDADeviceMap, log); err != nil {
 		log.Error(err, "CUDA restore sequence failed")
 		return 0, 0, err
 	}

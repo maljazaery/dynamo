@@ -55,7 +55,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 		"ext_mounts", len(m.CRIUDump.ExtMnt),
 		"criu_log_level", m.CRIUDump.CRIU.LogLevel,
 		"manage_cgroups_mode", m.CRIUDump.CRIU.ManageCgroupsMode,
-		"checkpoint_has_cuda", m.ExternalRestore != nil && m.ExternalRestore.CUDA != nil,
+		"checkpoint_has_cuda", m.CUDARestore != nil,
 	)
 
 	log.Info("Remounting /proc/sys read-write")

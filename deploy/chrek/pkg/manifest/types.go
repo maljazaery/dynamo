@@ -18,11 +18,11 @@ type CheckpointManifest struct {
 	CheckpointHash string    `yaml:"checkpointHash"`
 	CreatedAt      time.Time `yaml:"createdAt"`
 
-	CRIUDump        CRIUDumpManifest       `yaml:"criuDump"`
-	K8s             SourcePodManifest      `yaml:"k8s"`
-	Filesystem      FilesystemManifest     `yaml:"filesystem"`
-	Namespaces      []NamespaceEntry       `yaml:"namespaces"`
-	ExternalRestore *ExternalRestoreConfig `yaml:"externalRestore,omitempty"`
+	CRIUDump    CRIUDumpManifest     `yaml:"criuDump"`
+	K8s         SourcePodManifest    `yaml:"k8s"`
+	Filesystem  FilesystemManifest   `yaml:"filesystem"`
+	Namespaces  []NamespaceEntry     `yaml:"namespaces"`
+	CUDARestore *CUDARestoreManifest `yaml:"cudaRestore,omitempty"`
 }
 
 // NewCheckpointManifest assembles a CheckpointManifest from per-module builders.
@@ -45,10 +45,10 @@ func NewCheckpointManifest(
 
 // CRIUDumpManifest stores the resolved dump-time CRIU mount plan used for restore.
 type CRIUDumpManifest struct {
-	CRIU     config.CRIUSettings  `yaml:"criu"`
-	ExtMnt   []ExtMountEntry      `yaml:"extMnt,omitempty"`
-	External []string             `yaml:"external,omitempty"`
-	SkipMnt  []string             `yaml:"skipMnt,omitempty"`
+	CRIU     config.CRIUSettings `yaml:"criu"`
+	ExtMnt   []ExtMountEntry     `yaml:"extMnt,omitempty"`
+	External []string            `yaml:"external,omitempty"`
+	SkipMnt  []string            `yaml:"skipMnt,omitempty"`
 }
 
 // ExtMountEntry is a serializable CRIU ext-mount entry in checkpoint manifests.
@@ -155,14 +155,8 @@ func NewNamespaceEntries(namespaces map[namespace.Type]*namespace.Info) []Namesp
 	return result
 }
 
-// ExternalRestoreConfig holds metadata needed by the DaemonSet to perform
-// an external restore (rootfs replay, CRIU via nsenter, CUDA restore).
-type ExternalRestoreConfig struct {
-	CUDA *CUDARestoreData `yaml:"cuda,omitempty"`
-}
-
-// CUDARestoreData captures CUDA state from checkpoint time for restore.
-type CUDARestoreData struct {
+// CUDARestoreManifest captures CUDA state from checkpoint time for restore.
+type CUDARestoreManifest struct {
 	PIDs           []int    `yaml:"pids"`
 	SourceGPUUUIDs []string `yaml:"sourceGpuUuids"`
 	Locked         bool     `yaml:"locked"`

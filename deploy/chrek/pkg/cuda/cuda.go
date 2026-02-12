@@ -89,12 +89,10 @@ func PrepareCheckpoint(ctx context.Context, req CheckpointRequest, sourcePID int
 		return fmt.Errorf("no source GPU UUIDs found for %s/%s container %s", req.PodNamespace, req.PodName, req.ContainerName)
 	}
 
-	m.ExternalRestore = &manifest.ExternalRestoreConfig{
-		CUDA: &manifest.CUDARestoreData{
-			PIDs:           cudaPIDs,
-			SourceGPUUUIDs: sourceGPUUUIDs,
-			Locked:         true,
-		},
+	m.CUDARestore = &manifest.CUDARestoreManifest{
+		PIDs:           cudaPIDs,
+		SourceGPUUUIDs: sourceGPUUUIDs,
+		Locked:         true,
 	}
 
 	log.Info("Prepared external CUDA checkpoint metadata",
@@ -106,13 +104,13 @@ func PrepareCheckpoint(ctx context.Context, req CheckpointRequest, sourcePID int
 
 // UnlockFromManifest unlocks CUDA processes that were locked during checkpoint.
 func UnlockFromManifest(m *manifest.CheckpointManifest, log logr.Logger) {
-	if m == nil || m.ExternalRestore == nil || m.ExternalRestore.CUDA == nil {
+	if m == nil || m.CUDARestore == nil {
 		return
 	}
-	if !m.ExternalRestore.CUDA.Locked {
+	if !m.CUDARestore.Locked {
 		return
 	}
-	UnlockProcesses(context.Background(), m.ExternalRestore.CUDA.PIDs, log)
+	UnlockProcesses(context.Background(), m.CUDARestore.PIDs, log)
 }
 
 // UnlockProcesses unlocks a list of CUDA PIDs.
@@ -127,7 +125,7 @@ func UnlockProcesses(ctx context.Context, pids []int, log logr.Logger) {
 // Restore performs CUDA restore from inside the container namespace
 // (called by ns-restore-runner). Uses process tree walking instead of cgroup discovery.
 func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID int, deviceMap string, log logr.Logger) error {
-	if m.ExternalRestore == nil || m.ExternalRestore.CUDA == nil || len(m.ExternalRestore.CUDA.PIDs) == 0 {
+	if m.CUDARestore == nil || len(m.CUDARestore.PIDs) == 0 {
 		log.Info("Checkpoint does not contain CUDA metadata, skipping cuda-checkpoint restore")
 		return nil
 	}
@@ -139,7 +137,7 @@ func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID in
 	}
 	log.Info("Starting CUDA restore sequence",
 		"restored_pid", restoredPID,
-		"checkpoint_cuda_pids", len(m.ExternalRestore.CUDA.PIDs),
+		"checkpoint_cuda_pids", len(m.CUDARestore.PIDs),
 		"device_map", deviceMap,
 	)
 
@@ -183,7 +181,7 @@ func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID in
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("checkpoint captured %d CUDA PIDs but none found in restored process tree rooted at PID %d: %w", len(m.ExternalRestore.CUDA.PIDs), restoredPID, ctx.Err())
+			return fmt.Errorf("checkpoint captured %d CUDA PIDs but none found in restored process tree rooted at PID %d: %w", len(m.CUDARestore.PIDs), restoredPID, ctx.Err())
 		case <-time.After(cudaDiscoverTick):
 		}
 	}

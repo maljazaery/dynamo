@@ -3,10 +3,14 @@ package nsrunner
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sys/unix"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 )
@@ -20,7 +24,7 @@ type HostRestoreOptions struct {
 	RestoreSettings *config.CRIUSettings
 }
 
-func RestoreFromHost(ctx context.Context, opts HostRestoreOptions, log logr.Logger) (int, int, error) {
+func NSEnterCallFromHost(ctx context.Context, opts HostRestoreOptions, log logr.Logger) (int, int, error) {
 	pidStr := strconv.Itoa(opts.PlaceholderPID)
 
 	baseArgs := []string{
@@ -64,4 +68,20 @@ func RestoreFromHost(ctx context.Context, opts HostRestoreOptions, log logr.Logg
 	}
 
 	return restoredPID, restoredHostPID, nil
+}
+
+func EnsureDevNetTunInTargetRoot(targetRoot string, log logr.Logger) {
+	tunPath := filepath.Join(targetRoot, "dev/net/tun")
+	if _, statErr := os.Stat(tunPath); !os.IsNotExist(statErr) {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(tunPath), 0755); err != nil {
+		log.Error(err, "Failed to create /dev/net dir in placeholder")
+		return
+	}
+	if err := syscall.Mknod(tunPath, syscall.S_IFCHR|0666, int(unix.Mkdev(10, 200))); err != nil {
+		log.Error(err, "Failed to create /dev/net/tun in placeholder")
+		return
+	}
+	log.Info("Created /dev/net/tun in placeholder rootfs")
 }

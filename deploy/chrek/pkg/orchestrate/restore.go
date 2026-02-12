@@ -3,12 +3,8 @@ package orchestrate
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
-	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/go-logr/logr"
 
@@ -133,16 +129,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 	}
 
 	// Step 2.5: Ensure /dev/net/tun exists in placeholder rootfs
-	tunPath := filepath.Join(targetRoot, "dev/net/tun")
-	if _, statErr := os.Stat(tunPath); os.IsNotExist(statErr) {
-		if err := os.MkdirAll(filepath.Dir(tunPath), 0755); err != nil {
-			r.log.Error(err, "Failed to create /dev/net dir in placeholder")
-		} else if err := syscall.Mknod(tunPath, syscall.S_IFCHR|0666, int(unix.Mkdev(10, 200))); err != nil {
-			r.log.Error(err, "Failed to create /dev/net/tun in placeholder")
-		} else {
-			r.log.Info("Created /dev/net/tun in placeholder rootfs")
-		}
-	}
+	nsrunner.EnsureDevNetTunInTargetRoot(targetRoot, r.log)
 
 	// Step 3: Create link_remap stubs
 	if err := filesystem.CreateLinkRemapStubs(checkpointPath, targetRoot, r.log); err != nil {
@@ -150,7 +137,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 	}
 
 	// Step 4: Execute nsenter + ns-restore-runner
-	restoredPID, restoredHostPID, err := nsrunner.RestoreFromHost(ctx, nsrunner.HostRestoreOptions{
+	restoredPID, restoredHostPID, err := nsrunner.NSEnterCallFromHost(ctx, nsrunner.HostRestoreOptions{
 		PlaceholderPID:  placeholderPID,
 		RunnerPath:      r.cfg.NSRestoreRunnerPath,
 		CheckpointPath:  checkpointPath,

@@ -1,109 +1,162 @@
-// Package main provides the CRIU node agent with HTTP API and/or pod watching.
-// The agent supports two modes that can be enabled independently:
-// - HTTP API mode: Exposes REST endpoints for checkpoint/restore operations
-// - Watcher mode: Automatically checkpoints pods with nvidia.com/checkpoint-source=true label
+// Package main provides the chrek DaemonSet agent.
+// The agent runs a UDS HTTP server for checkpoint/restore operations and
+// optionally watches pods for automatic checkpointing.
 package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/go-logr/logr"
+	gozap "go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
+
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
-	httpApiServer "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/http_api_server"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/externalrestore"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/watcher"
 )
 
 func main() {
-	// Load configuration from ConfigMap (or use defaults if not found)
+	configureLogging()
+	agentLog := ctrl.Log.WithName("agent")
+
 	cfg, err := LoadConfigOrDefault(ConfigMapPath)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		fatal(agentLog, err, "Failed to load configuration")
+	}
+	if err := cfg.Validate(); err != nil {
+		fatal(agentLog, err, "Invalid configuration")
 	}
 
-	// Validate configuration
-	if err := cfg.Agent.Validate(); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
-	}
-
-	// Create discovery client
 	discoveryClient, err := checkpoint.NewDiscoveryClient()
 	if err != nil {
-		log.Fatalf("Failed to create discovery client: %v", err)
+		fatal(agentLog, err, "Failed to create discovery client")
 	}
 	defer discoveryClient.Close()
 
-	// Create checkpointer
 	checkpointer := checkpoint.NewCheckpointer(discoveryClient)
+
+	// Create the external restorer
+	restorer := externalrestore.NewRestorer(
+		externalrestore.RestorerConfig{
+			CheckpointBasePath: cfg.Checkpoint.BasePath,
+		},
+		discoveryClient,
+	)
+
+	// Create UDS server
+	serverCfg := externalrestore.ServerConfig{
+		SocketPath:     cfg.Agent.SocketPath,
+		NodeName:       cfg.Agent.NodeName,
+		CheckpointSpec: &cfg.Checkpoint,
+		CRIUTimeout:    cfg.Checkpoint.CRIU.Timeout,
+	}
+	srv := externalrestore.NewServer(serverCfg, checkpointer, restorer)
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Printf("CRIU Node Agent starting (node: %s)", cfg.Agent.NodeName)
-	log.Printf("Checkpoint directory: %s", cfg.Checkpoint.BasePath)
-	log.Printf("Signal source: %s", cfg.Agent.SignalSource)
+	agentLog.Info("Starting chrek agent",
+		"node", cfg.Agent.NodeName,
+		"checkpoint_dir", cfg.Checkpoint.BasePath,
+		"socket_path", cfg.Agent.SocketPath,
+		"watcher_enabled", cfg.Agent.EnableWatcher,
+		"watch_namespace", cfg.Agent.RestrictedNamespace,
+	)
 
-	switch cfg.Agent.GetSignalSource() {
-	case SignalFromHTTP:
-		serverCfg := httpApiServer.ServerConfig{
-			ListenAddr:     cfg.Agent.ListenAddr,
-			NodeName:       cfg.Agent.NodeName,
-			CheckpointSpec: &cfg.Checkpoint,
-		}
-		srv := httpApiServer.NewServer(serverCfg, checkpointer)
-
-		// Handle graceful shutdown
-		go func() {
-			<-sigChan
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer shutdownCancel()
-			if err := srv.Shutdown(shutdownCtx); err != nil {
-				log.Printf("HTTP server shutdown error: %v", err)
-			}
-		}()
-
-		if err := srv.Start(); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
-		}
-
-	case SignalFromWatcher:
-		watcherConfig := watcher.WatcherConfig{
+	// Start optional watcher alongside UDS server
+	if cfg.Agent.EnableWatcher {
+		watcherCfg := watcher.WatcherConfig{
 			NodeName:            cfg.Agent.NodeName,
-			ListenAddr:          cfg.Agent.ListenAddr,
 			RestrictedNamespace: cfg.Agent.RestrictedNamespace,
+			AgentSocketPath:     cfg.Agent.SocketPath,
 			CheckpointSpec:      &cfg.Checkpoint,
 		}
-
-		podWatcher, err := watcher.NewWatcher(watcherConfig, discoveryClient, checkpointer)
+		podWatcher, err := watcher.NewWatcher(watcherCfg, discoveryClient)
 		if err != nil {
-			log.Fatalf("Failed to create pod watcher: %v", err)
+			fatal(agentLog, err, "Failed to create pod watcher")
 		}
-
-		// Handle graceful shutdown
 		go func() {
-			<-sigChan
-			log.Println("Shutting down pod watcher...")
-			cancel()
+			agentLog.Info("Pod watcher started", "label", checkpoint.KubeLabelCheckpointSource)
+			if err := podWatcher.Start(ctx); err != nil {
+				agentLog.Error(err, "Pod watcher exited")
+			}
 		}()
-
-		log.Printf("Pod watcher started (watching for label: %s=true)", checkpoint.KubeLabelCheckpointSource)
-		log.Printf("Health check endpoint: http://0.0.0.0%s/health", cfg.Agent.ListenAddr)
-		if err := podWatcher.Start(ctx); err != nil {
-			log.Printf("Pod watcher error: %v", err)
-		}
-
-	default:
-		log.Fatalf("Unknown signal source: %s", cfg.Agent.SignalSource)
 	}
 
-	log.Println("Agent stopped")
+	// Handle graceful shutdown
+	go func() {
+		<-sigChan
+		agentLog.Info("Shutting down")
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			agentLog.Error(err, "Server shutdown error")
+		}
+	}()
+
+	// Start UDS server (blocks until shutdown)
+	if err := srv.Start(); err != nil && err != http.ErrServerClosed {
+		fatal(agentLog, err, "Server error")
+	}
+
+	agentLog.Info("Agent stopped")
+}
+
+func configureLogging() {
+	level := strings.TrimSpace(strings.ToLower(os.Getenv("CHREK_LOG_LEVEL")))
+	if level == "" {
+		level = "info"
+	}
+
+	atomicLevel := gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+	parseErr := error(nil)
+	switch level {
+	case "trace", "debug":
+		atomicLevel = gozap.NewAtomicLevelAt(zapcore.DebugLevel)
+	case "info":
+		atomicLevel = gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+	case "warn", "warning":
+		atomicLevel = gozap.NewAtomicLevelAt(zapcore.WarnLevel)
+	case "error":
+		atomicLevel = gozap.NewAtomicLevelAt(zapcore.ErrorLevel)
+	default:
+		parseErr = fmt.Errorf("invalid level %q", level)
+	}
+	if parseErr != nil {
+		atomicLevel = gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+	}
+
+	opts := ctrlzap.Options{
+		Development: true,
+		Level:       &atomicLevel,
+		TimeEncoder: zapcore.RFC3339NanoTimeEncoder,
+	}
+	ctrl.SetLogger(ctrlzap.New(ctrlzap.UseFlagOptions(&opts), ctrlzap.WriteTo(os.Stdout)))
+
+	if parseErr != nil {
+		ctrl.Log.WithName("setup").Info("Invalid CHREK_LOG_LEVEL, falling back to info", "value", level, "error", parseErr)
+	}
+}
+
+func fatal(log logr.Logger, err error, msg string, keysAndValues ...interface{}) {
+	if err != nil {
+		log.Error(err, msg, keysAndValues...)
+	} else {
+		log.Info(msg, keysAndValues...)
+	}
+	os.Exit(1)
 }

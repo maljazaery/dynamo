@@ -6,8 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
-	"github.com/sirupsen/logrus"
+	"github.com/go-logr/logr"
 )
 
 // CaptureDevShm captures files from /dev/shm to the checkpoint directory.
@@ -20,14 +21,14 @@ import (
 //
 // The files are saved to <checkpointDir>/dev-shm/ and can be restored
 // using RestoreDevShm before CRIU restore.
-func CaptureDevShm(pid int, checkpointDir string, log *logrus.Entry) error {
+func CaptureDevShm(pid int, checkpointDir string, log logr.Logger) error {
 	// Access container's /dev/shm via /proc/<pid>/root
 	shmPath := filepath.Join(HostProcPath, fmt.Sprintf("%d/root/dev/shm", pid))
 
 	entries, err := os.ReadDir(shmPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Debug("Container /dev/shm does not exist, skipping capture")
+			log.V(1).Info("Container /dev/shm does not exist, skipping capture")
 			return nil
 		}
 		return fmt.Errorf("failed to read container /dev/shm: %w", err)
@@ -38,7 +39,7 @@ func CaptureDevShm(pid int, checkpointDir string, log *logrus.Entry) error {
 	for _, entry := range entries {
 		// Skip directories (unlikely in /dev/shm but be safe)
 		if entry.IsDir() {
-			log.WithField("dir", entry.Name()).Debug("Skipping directory in /dev/shm")
+			log.V(1).Info("Skipping directory in /dev/shm", "dir", entry.Name())
 			continue
 		}
 
@@ -46,7 +47,7 @@ func CaptureDevShm(pid int, checkpointDir string, log *logrus.Entry) error {
 	}
 
 	if len(filesToCapture) == 0 {
-		log.Debug("No files to capture from /dev/shm")
+		log.V(1).Info("No files to capture from /dev/shm")
 		return nil
 	}
 
@@ -66,40 +67,39 @@ func CaptureDevShm(pid int, checkpointDir string, log *logrus.Entry) error {
 
 		info, err := entry.Info()
 		if err != nil {
-			log.WithError(err).WithField("file", name).Warn("Failed to get file info, skipping")
+			log.Error(err, "Failed to get file info, skipping", "file", name)
 			continue
 		}
 
 		size := info.Size()
 
-		// Copy the file
-		if err := copyFile(srcPath, destPath, info.Mode()); err != nil {
-			log.WithError(err).WithField("file", name).Warn("Failed to copy file, skipping")
+		uid, gid := -1, -1
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			uid = int(stat.Uid)
+			gid = int(stat.Gid)
+		}
+
+		// Copy the file and preserve ownership for restore-time /dev/shm replay.
+		if err := copyFile(srcPath, destPath, info.Mode(), uid, gid); err != nil {
+			log.Error(err, "Failed to copy file, skipping", "file", name)
 			continue
 		}
 
 		captured = append(captured, name)
 		totalSize += size
 
-		log.WithFields(logrus.Fields{
-			"file": name,
-			"size": size,
-		}).Debug("Captured /dev/shm file")
+		log.V(1).Info("Captured /dev/shm file", "file", name, "size", size)
 	}
 
 	if len(captured) > 0 {
-		log.WithFields(logrus.Fields{
-			"count":      len(captured),
-			"total_size": totalSize,
-			"files":      captured,
-		}).Info("Captured /dev/shm files")
+		log.Info("Captured /dev/shm files", "count", len(captured), "total_size", totalSize, "files", captured)
 	}
 
 	return nil
 }
 
-// copyFile copies a file from src to dest with the given permissions.
-func copyFile(src, dest string, mode os.FileMode) error {
+// copyFile copies a file from src to dest with the given permissions and ownership.
+func copyFile(src, dest string, mode os.FileMode, uid, gid int) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("failed to open source: %w", err)
@@ -114,6 +114,12 @@ func copyFile(src, dest string, mode os.FileMode) error {
 
 	if _, err := io.Copy(destFile, srcFile); err != nil {
 		return fmt.Errorf("failed to copy contents: %w", err)
+	}
+
+	if uid >= 0 && gid >= 0 {
+		if err := destFile.Chown(uid, gid); err != nil {
+			return fmt.Errorf("failed to set ownership to %d:%d: %w", uid, gid, err)
+		}
 	}
 
 	// Sync to ensure durability for checkpoint data

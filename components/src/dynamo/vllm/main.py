@@ -103,8 +103,8 @@ async def worker():
         config.served_model_name = config.engine_args.served_model_name = config.model
 
     # Check checkpoint mode and validate env vars EARLY (fail fast if misconfigured)
-    checkpoint_cfg = get_checkpoint_config()
-    if checkpoint_cfg and checkpoint_cfg.checkpoint_exists():
+    early_exit, checkpoint_cfg = get_checkpoint_config()
+    if early_exit:
         return
 
     # Download the model if necessary using modelexpress.
@@ -121,17 +121,14 @@ async def worker():
 
     # CHECKPOINT MODE: Load engine BEFORE runtime creation
     # This allows checkpointing GPU state before runtime connections are established
-    pre_created_engine = None
+    engine_client = None
     if checkpoint_cfg is not None:
-        logger.info(
-            f"Checkpoint mode enabled (signal_file={checkpoint_cfg.signal_file})"
-        )
+        logger.info("Checkpoint mode enabled (watcher-driven signals)")
 
         # Checkpoint mode requires sleep mode — enable before engine init
         config.engine_args.enable_sleep_mode = True
 
-        pre_created_engine = setup_vllm_engine(config)
-        engine_client = pre_created_engine[0]
+        engine_client, _, _, _, _ = setup_vllm_engine(config)
 
         if not await checkpoint_cfg.run_lifecycle(
             engine_client, CHECKPOINT_SLEEP_MODE_LEVEL
@@ -157,7 +154,7 @@ async def worker():
         or config.multimodal_encode_prefill_worker
     ):
         await init_multimodal_worker(
-            runtime, config, shutdown_event, pre_created_engine=pre_created_engine
+            runtime, config, shutdown_event, pre_created_engine=engine_client
         )
         logger.debug("init_multimodal_worker completed")
     elif config.omni:
@@ -165,12 +162,12 @@ async def worker():
         logger.debug("init_omni completed")
     elif config.is_prefill_worker:
         await init_prefill(
-            runtime, config, shutdown_event, pre_created_engine=pre_created_engine
+            runtime, config, shutdown_event, pre_created_engine=engine_client
         )
         logger.debug("init_prefill completed")
     else:
         await init(
-            runtime, config, shutdown_event, pre_created_engine=pre_created_engine
+            runtime, config, shutdown_event, pre_created_engine=engine_client
         )
         logger.debug("init completed")
 

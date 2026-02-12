@@ -45,10 +45,8 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.daemonset.runtimeClassName }}
-      # Use specified runtime class for GPU access (e.g., nvidia for CUDA checkpointing)
-      runtimeClassName: {{ .Values.daemonset.runtimeClassName }}
-      {{- end }}
+      # CUDA checkpoint/restore requires the nvidia container runtime
+      runtimeClassName: nvidia
       {{- if .Values.seccomp.deploy }}
       initContainers:
         # Deploy seccomp profile to host before starting the agent
@@ -109,12 +107,19 @@ spec:
             - name: containerd-storage
               mountPath: /var/lib/containerd
               readOnly: true
-            # Mount host proc for CRIU and signal file writing
+            # Mount host proc for CRIU and runtime PID signaling
             - name: host-proc
               mountPath: /host/proc
             # Mount host cgroup for CRIU
             - name: host-cgroup
               mountPath: /sys/fs/cgroup
+              readOnly: true
+            # UDS socket directory (shared with sidecars via hostPath)
+            - name: chrek-socket
+              mountPath: /var/run/chrek
+            # Kubelet PodResources API socket (for GPU UUID discovery)
+            - name: kubelet-pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
               readOnly: true
             {{- if and (eq .Values.storage.type "oci") .Values.storage.oci.credentialsSecretRef }}
             # Mount docker config for OCI registry auth
@@ -165,7 +170,7 @@ spec:
           hostPath:
             path: /var/lib/containerd
             type: Directory
-        # Host proc (for CRIU and signal files - needs write access)
+        # Host proc (for CRIU and runtime signaling - needs write access)
         - name: host-proc
           hostPath:
             path: /proc
@@ -174,6 +179,16 @@ spec:
         - name: host-cgroup
           hostPath:
             path: /sys/fs/cgroup
+            type: Directory
+        # UDS socket directory (shared between DaemonSet and sidecars)
+        - name: chrek-socket
+          hostPath:
+            path: /var/run/chrek
+            type: DirectoryOrCreate
+        # Kubelet PodResources API socket directory
+        - name: kubelet-pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
             type: Directory
         {{- if and (eq .Values.storage.type "oci") .Values.storage.oci.credentialsSecretRef }}
         - name: docker-config
@@ -184,4 +199,3 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-

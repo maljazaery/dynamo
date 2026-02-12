@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"time"
 
-	criu "github.com/checkpoint-restore/go-criu/v7"
-	criurpc "github.com/checkpoint-restore/go-criu/v7/rpc"
+	criu "github.com/checkpoint-restore/go-criu/v8"
+	criurpc "github.com/checkpoint-restore/go-criu/v8/rpc"
+	"github.com/go-logr/logr"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
+
+var criuLog = ctrl.Log.WithName("checkpointer").WithName("criu")
 
 // CRIUSettings holds CRIU-specific configuration options.
 // Options are categorized by how they are passed to CRIU:
@@ -64,7 +67,7 @@ type CRIUSettings struct {
 	// ExtMasters allows external bind mount masters.
 	ExtMasters bool `yaml:"extMasters"`
 
-	// ManageCgroupsMode controls cgroup handling: "ignore" lets K8s manage cgroups.
+	// ManageCgroupsMode controls cgroup handling: ignore/soft/full/strict.
 	ManageCgroupsMode string `yaml:"manageCgroupsMode"`
 
 	// === CRIU Conf File Options (NOT available via RPC - written to criu.conf) ===
@@ -148,10 +151,10 @@ func BuildCRIUDumpOptions(
 	extMnt := buildExternalMountMaps(mountPolicy.Externalized)
 	skipMnt := mountPolicy.Skipped
 	external := buildExternalNamespaces(namespaces)
-	logrus.WithFields(logrus.Fields{
-		"externalized_count": len(mountPolicy.Externalized),
-		"skipped_count":      len(mountPolicy.Skipped),
-	}).Debug("Resolved mount policy for CRIU dump")
+	criuLog.V(1).Info("Resolved mount policy for CRIU dump",
+		"externalized_count", len(mountPolicy.Externalized),
+		"skipped_count", len(mountPolicy.Skipped),
+	)
 
 	criuOpts := &criurpc.CriuOpts{
 		Pid:         proto.Int32(int32(pid)),
@@ -232,27 +235,27 @@ func buildExternalNamespaces(namespaces map[NamespaceType]*NamespaceInfo) []stri
 	// Mark network namespace as external for socket binding preservation
 	if netNs, ok := namespaces[NamespaceNet]; ok {
 		external = append(external, fmt.Sprintf("%s[%d]:%s", NamespaceNet, netNs.Inode, "extNetNs"))
-		logrus.WithField("inode", netNs.Inode).Debug("Marked network namespace as external")
+		criuLog.V(1).Info("Marked network namespace as external", "inode", netNs.Inode)
 	}
 
 	return external
 }
 
 // ExecuteCRIUDump runs the CRIU dump and logs timing plus dump-log location on failure.
-func ExecuteCRIUDump(criuOpts *criurpc.CriuOpts, checkpointDir string, log *logrus.Entry) (time.Duration, error) {
+func ExecuteCRIUDump(criuOpts *criurpc.CriuOpts, checkpointDir string, log logr.Logger) (time.Duration, error) {
 	criuDumpStart := time.Now()
 	criuClient := criu.MakeCriu()
 	if err := criuClient.Dump(criuOpts, nil); err != nil {
 		dumpDuration := time.Since(criuDumpStart)
-		log.WithFields(logrus.Fields{
-			"duration":       dumpDuration,
-			"checkpoint_dir": checkpointDir,
-			"dump_log_path":  fmt.Sprintf("%s/%s", checkpointDir, DumpLogFilename),
-		}).Error("CRIU dump failed")
+		log.Error(err, "CRIU dump failed",
+			"duration", dumpDuration,
+			"checkpoint_dir", checkpointDir,
+			"dump_log_path", fmt.Sprintf("%s/%s", checkpointDir, DumpLogFilename),
+		)
 		return 0, fmt.Errorf("CRIU dump failed: %w", err)
 	}
 
 	criuDumpDuration := time.Since(criuDumpStart)
-	log.WithField("duration", criuDumpDuration).Info("CRIU dump completed")
+	log.Info("CRIU dump completed", "duration", criuDumpDuration)
 	return criuDumpDuration, nil
 }

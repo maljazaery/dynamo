@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-logr/logr"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/sirupsen/logrus"
 )
 
 // FilesystemConfig is the static config for rootfs exclusions (from values.yaml).
@@ -230,32 +230,29 @@ func FindWhiteoutFiles(upperDir string) ([]string, error) {
 
 // CaptureRootfsState captures the overlay upperdir and deleted files after CRIU dump.
 // Updates the checkpoint manifest with rootfs diff information and saves it.
-func CaptureRootfsState(upperDir, checkpointDir string, data *CheckpointManifest, log *logrus.Entry) {
+func CaptureRootfsState(upperDir, checkpointDir string, data *CheckpointManifest, log logr.Logger) {
 	if upperDir == "" || data == nil {
 		return
 	}
 
 	// Capture rootfs diff using exclusions from the checkpoint manifest.
 	configuredExclusions := data.Filesystem.Exclusions.GetAllExclusions()
-	log.WithFields(logrus.Fields{
-		"configured_exclusions": configuredExclusions,
-		"bind_mount_exclusions": data.Filesystem.BindMountDests,
-	}).Debug("Rootfs diff exclusions")
+	log.V(1).Info("Rootfs diff exclusions",
+		"configured_exclusions", configuredExclusions,
+		"bind_mount_exclusions", data.Filesystem.BindMountDests,
+	)
 	rootfsDiffPath, err := CaptureRootfsDiff(upperDir, checkpointDir, &data.Filesystem.Exclusions, data.Filesystem.BindMountDests)
 	if err != nil {
-		log.WithError(err).Warn("Failed to capture rootfs diff")
+		log.Error(err, "Failed to capture rootfs diff")
 	} else {
 		data.Filesystem.HasRootfsDiff = true
-		log.WithFields(logrus.Fields{
-			"upperdir": upperDir,
-			"tar_path": rootfsDiffPath,
-		}).Info("Captured rootfs diff")
+		log.Info("Captured rootfs diff", "upperdir", upperDir, "tar_path", rootfsDiffPath)
 	}
 
 	// Capture deleted files (whiteouts)
 	hasDeletedFiles, err := CaptureDeletedFiles(upperDir, checkpointDir)
 	if err != nil {
-		log.WithError(err).Warn("Failed to capture deleted files")
+		log.Error(err, "Failed to capture deleted files")
 	} else if hasDeletedFiles {
 		data.Filesystem.HasDeletedFiles = true
 		log.Info("Recorded deleted files (whiteouts)")
@@ -263,6 +260,6 @@ func CaptureRootfsState(upperDir, checkpointDir string, data *CheckpointManifest
 
 	// Update checkpoint manifest with rootfs diff info.
 	if err := WriteCheckpointManifest(checkpointDir, data); err != nil {
-		log.WithError(err).Warn("Failed to update checkpoint manifest with rootfs diff info")
+		log.Error(err, "Failed to update checkpoint manifest with rootfs diff info")
 	}
 }

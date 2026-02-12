@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
-	criurpc "github.com/checkpoint-restore/go-criu/v7/rpc"
+	criurpc "github.com/checkpoint-restore/go-criu/v8/rpc"
+	"github.com/go-logr/logr"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/common"
 )
@@ -28,67 +29,72 @@ type ContainerInfoSnapshot struct {
 
 // CheckpointManifest is saved as manifest.yaml at checkpoint time and loaded at restore.
 type CheckpointManifest struct {
-	CheckpointID string    `yaml:"checkpointId"`
-	CreatedAt    time.Time `yaml:"createdAt"`
+	CheckpointHash string    `yaml:"checkpointHash"`
+	CreatedAt      time.Time `yaml:"createdAt"`
 
-	CRIUDump   CRIUDumpManifest         `yaml:"criuDump"`
-	K8s        SourcePodManifest        `yaml:"k8s"`
-	Filesystem FilesystemManifest       `yaml:"filesystem"`
-	Namespaces []NamespaceManifestEntry `yaml:"namespaces"`
+	CRIUDump        CRIUDumpManifest         `yaml:"criuDump"`
+	K8s             SourcePodManifest        `yaml:"k8s"`
+	Filesystem      FilesystemManifest       `yaml:"filesystem"`
+	Namespaces      []NamespaceManifestEntry `yaml:"namespaces"`
+	ExternalRestore *ExternalRestoreConfig   `yaml:"externalRestore,omitempty"`
 }
 
 // NewCheckpointManifest assembles a CheckpointManifest from per-module builders.
 func NewCheckpointManifest(
-	checkpointID string,
+	checkpointHash string,
 	criuDump CRIUDumpManifest,
 	k8s SourcePodManifest,
 	filesystem FilesystemManifest,
 	namespaces []NamespaceManifestEntry,
 ) *CheckpointManifest {
 	return &CheckpointManifest{
-		CheckpointID: checkpointID,
-		CreatedAt:    time.Now().UTC(),
-		CRIUDump:     criuDump,
-		K8s:          k8s,
-		Filesystem:   filesystem,
-		Namespaces:   namespaces,
+		CheckpointHash: checkpointHash,
+		CreatedAt:      time.Now().UTC(),
+		CRIUDump:       criuDump,
+		K8s:            k8s,
+		Filesystem:     filesystem,
+		Namespaces:     namespaces,
 	}
 }
 
 // CheckpointRequest holds per-checkpoint identifiers for a checkpoint operation.
 type CheckpointRequest struct {
-	ContainerID   string
-	ContainerName string // K8s container name (for K8s API volume type lookup)
-	CheckpointID  string
-	CheckpointDir string
-	NodeName      string
-	PodName       string
-	PodNamespace  string
+	ContainerID    string
+	ContainerName  string // K8s container name (for K8s API volume type lookup)
+	CheckpointHash string
+	CheckpointDir  string
+	NodeName       string
+	PodName        string
+	PodNamespace   string
 }
 
 // CheckpointOutcome contains the result of a checkpoint operation.
 type CheckpointOutcome struct {
-	CheckpointID  string
-	CheckpointDir string
-	Data          *CheckpointManifest
+	CheckpointHash string
+	CheckpointDir  string
+	Data           *CheckpointManifest
 }
 
 // Checkpointer performs CRIU checkpoint operations
 type Checkpointer struct {
 	discoveryClient *DiscoveryClient
-	log             *logrus.Entry
+	log             logr.Logger
 }
 
 // NewCheckpointer creates a new checkpointer
 func NewCheckpointer(discoveryClient *DiscoveryClient) *Checkpointer {
 	return &Checkpointer{
 		discoveryClient: discoveryClient,
-		log:             logrus.WithField("component", "checkpointer"),
+		log:             ctrl.Log.WithName("checkpointer"),
 	}
 }
 
 // Checkpoint performs a CRIU dump of a container.
 // The operation has three phases: introspect, configure, capture.
+//
+// The checkpoint directory is staged under tmp/<hash> during the operation.
+// On success, it is atomically renamed to <hash> at the base path root,
+// so directory existence at the root means the checkpoint is complete.
 func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, spec *CheckpointSpec) (*CheckpointOutcome, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("checkpoint spec is required")
@@ -96,14 +102,15 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 	checkpointStart := time.Now()
 	c.log.Info("=== Starting checkpoint operation ===")
 
-	checkpointDir := filepath.Join(req.CheckpointDir, req.CheckpointID)
-	if err := os.MkdirAll(checkpointDir, 0700); err != nil {
+	finalDir := filepath.Join(req.CheckpointDir, req.CheckpointHash)
+	tmpDir := filepath.Join(req.CheckpointDir, TmpCheckpointDir, req.CheckpointHash)
+	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create checkpoint directory: %w", err)
 	}
 
 	// Open image directory FD for CRIU — must stay open through both configure and capture
 	// phases since CRIU's swrk child process inherits this FD.
-	imageDir, imageDirFD, err := common.OpenPathForCRIU(checkpointDir)
+	imageDir, imageDirFD, err := common.OpenPathForCRIU(tmpDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open image directory: %w", err)
 	}
@@ -116,27 +123,33 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 	}
 
 	// Phase 2: Configure CRIU options and build checkpoint manifest.
-	criuOpts, data, err := c.configure(state, req, spec, checkpointDir, imageDirFD)
+	criuOpts, data, err := c.configure(ctx, state, req, spec, tmpDir, imageDirFD)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockExternalCUDA(data, c.log)
+
+	// Phase 3: Capture — CRIU dump, /dev/shm, rootfs diff
+	criuDumpDuration, err := c.capture(criuOpts, data, state, tmpDir)
 	if err != nil {
 		return nil, err
 	}
 
-	// Phase 3: Capture — CRIU dump, /dev/shm, rootfs diff
-	criuDumpDuration, err := c.capture(criuOpts, data, state, checkpointDir)
-	if err != nil {
-		return nil, err
+	// Atomic rename: tmp/<hash> -> <hash> signals checkpoint completeness
+	if err := os.Rename(tmpDir, finalDir); err != nil {
+		return nil, fmt.Errorf("failed to finalize checkpoint directory: %w", err)
 	}
 
 	totalDuration := time.Since(checkpointStart)
-	c.log.WithFields(logrus.Fields{
-		"total_duration":     totalDuration,
-		"criu_dump_duration": criuDumpDuration,
-	}).Info("=== Checkpoint operation completed ===")
+	c.log.Info("=== Checkpoint operation completed ===",
+		"total_duration", totalDuration,
+		"criu_dump_duration", criuDumpDuration,
+	)
 
 	return &CheckpointOutcome{
-		CheckpointID:  req.CheckpointID,
-		CheckpointDir: checkpointDir,
-		Data:          data,
+		CheckpointHash: req.CheckpointHash,
+		CheckpointDir:  finalDir,
+		Data:           data,
 	}, nil
 }
 
@@ -176,6 +189,7 @@ func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*Con
 
 // configure builds CRIU options and checkpoint manifest from runtime snapshot and spec.
 func (c *Checkpointer) configure(
+	ctx context.Context,
 	state *ContainerInfoSnapshot,
 	req CheckpointRequest,
 	spec *CheckpointSpec,
@@ -204,14 +218,19 @@ func (c *Checkpointer) configure(
 
 	// Build and save the checkpoint manifest.
 	manifest := NewCheckpointManifest(
-		req.CheckpointID,
+		req.CheckpointHash,
 		NewCRIUDumpManifest(criuOpts, spec.CRIU),
 		NewSourcePodManifest(req, state.PID),
 		NewFilesystemManifest(spec.RootfsExclusions, state.UpperDir, state.OCISpec),
 		NewNamespaceManifestEntries(state.Namespaces),
 	)
 
+	if err := prepareExternalCUDA(ctx, req, state.PID, manifest, c.log); err != nil {
+		return nil, nil, fmt.Errorf("failed to prepare external CUDA checkpoint metadata: %w", err)
+	}
+
 	if err := WriteCheckpointManifest(checkpointDir, manifest); err != nil {
+		unlockExternalCUDA(manifest, c.log)
 		return nil, nil, fmt.Errorf("failed to write checkpoint manifest: %w", err)
 	}
 
@@ -233,7 +252,7 @@ func (c *Checkpointer) capture(
 
 	// Capture /dev/shm contents (must happen after dump for final process state)
 	if err := CaptureDevShm(state.PID, checkpointDir, c.log); err != nil {
-		c.log.WithError(err).Warn("Failed to capture /dev/shm contents")
+		c.log.Error(err, "Failed to capture /dev/shm contents")
 	}
 
 	// Capture rootfs diff and deleted files

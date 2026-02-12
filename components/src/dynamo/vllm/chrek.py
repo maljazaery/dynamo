@@ -8,86 +8,61 @@ Handles the checkpoint job pod lifecycle:
 1. Early exit if a checkpoint already exists (idempotency)
 2. Sleep model for CRIU-friendly GPU state
 3. Signal readiness for DaemonSet to begin checkpoint
-4. Poll for checkpoint completion or CRIU restore detection
+4. Wait for watcher signals from the DaemonSet
 5. Wake model after restore
 
-Environment variables (all required in checkpoint mode, no fallbacks):
-- DYN_CHECKPOINT_SIGNAL_FILE: Path where DaemonSet writes completion signal
+Environment variables:
 - DYN_READY_FOR_CHECKPOINT_FILE: Path where this worker writes readiness marker
-- DYN_CHECKPOINT_STORAGE_TYPE: Storage backend (pvc, s3, oci)
-- DYN_CHECKPOINT_LOCATION: Full checkpoint path (for idempotency check)
-- DYN_RESTORE_MARKER_FILE: Path written by restore-entrypoint before CRIU restore
+- DYN_CHECKPOINT_STORAGE_TYPE: Storage backend (pvc, s3, oci) (optional, defaults to pvc)
+- DYN_CHECKPOINT_LOCATION: Full checkpoint path (optional when PATH+HASH are provided)
+- DYN_CHECKPOINT_PATH + DYN_CHECKPOINT_HASH: PVC base path + hash (used to derive location)
+
+Signals handled in checkpoint mode:
+- SIGUSR1: Checkpoint completed, exit process
+- SIGUSR2: Restore completed, wake model and continue
+- SIGTERM: Checkpoint/restore failed
 """
 
 import asyncio
-import json
 import logging
 import os
+import signal
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-_REQUIRED_ENV_VARS = [
-    "DYN_CHECKPOINT_SIGNAL_FILE",
-    "DYN_READY_FOR_CHECKPOINT_FILE",
-    "DYN_CHECKPOINT_STORAGE_TYPE",
-    "DYN_CHECKPOINT_LOCATION",
-    "DYN_RESTORE_MARKER_FILE",
-]
 
 
 class CheckpointConfig:
     """Parsed and validated checkpoint configuration from environment variables."""
 
     def __init__(self):
-        self.signal_file = os.environ["DYN_CHECKPOINT_SIGNAL_FILE"]
+        self.is_checkpoint_job = "DYN_CHECKPOINT_LOCATION" in os.environ
         self.ready_file = os.environ["DYN_READY_FOR_CHECKPOINT_FILE"]
-        self.storage_type = os.environ["DYN_CHECKPOINT_STORAGE_TYPE"]
-        self.location = os.environ["DYN_CHECKPOINT_LOCATION"]
-        self.restore_marker = os.environ["DYN_RESTORE_MARKER_FILE"]
-
-    def _read_status_file(self, path: str) -> dict:
-        with open(path) as f:
-            status = json.load(f)
-
-        success = status.get("success")
-        if not isinstance(success, bool):
-            raise ValueError(f"missing or invalid success field in {path}")
-        return status
+        self.storage_type = os.environ.get("DYN_CHECKPOINT_STORAGE_TYPE", "pvc")
+        self.location = os.environ.get("DYN_CHECKPOINT_LOCATION", "")
+        if not self.location:
+            checkpoint_path = os.environ.get("DYN_CHECKPOINT_PATH", "").rstrip("/")
+            checkpoint_hash = os.environ.get("DYN_CHECKPOINT_HASH", "")
+            if checkpoint_path and checkpoint_hash:
+                self.location = f"{checkpoint_path}/{checkpoint_hash}"
+        self._checkpoint_done = asyncio.Event()
+        self._restore_done = asyncio.Event()
+        self._checkpoint_failed = asyncio.Event()
 
     def checkpoint_exists(self) -> bool:
         """Check if a completed checkpoint already exists (idempotency).
 
-        For PVC storage, checks for checkpoint.done marker at the location.
-        Returns True if the job should exit without loading the model.
+        A checkpoint is complete when its directory exists at the base path root
+        (not under the tmp/ staging area). Directory presence = done.
         """
-        assert (
-            self.storage_type == "pvc"
-        ), "Checkpoint existence check is only implemented for PVC storage"
-        if self.storage_type == "pvc" and self.location:
-            done_marker = f"{self.location}/checkpoint.done"
-            if os.path.exists(done_marker):
-                try:
-                    status = self._read_status_file(done_marker)
-                except (OSError, ValueError, json.JSONDecodeError) as exc:
-                    logger.warning(
-                        f"Invalid checkpoint.done marker at {done_marker}, ignoring stale checkpoint: {exc}"
-                    )
-                    return False
+        if self.storage_type != "pvc":
+            return False
 
-                if status["success"]:
-                    logger.info(
-                        f"Existing successful checkpoint found at {self.location}, skipping"
-                    )
-                    return True
+        if os.path.isdir(self.location):
+            logger.info(f"Existing checkpoint found at {self.location}, skipping")
+            return True
 
-                logger.warning(
-                    f"Existing checkpoint marker reports failure at {self.location}: "
-                    f"{status.get('error', 'unknown error')}"
-                )
-                return False
-
-            logger.info(f"No checkpoint at {self.location}, creating new one")
+        logger.info(f"No checkpoint at {self.location}, creating new one")
         return False
 
     async def run_lifecycle(self, engine_client, sleep_level: int) -> bool:
@@ -95,7 +70,7 @@ class CheckpointConfig:
 
         1. Put model to sleep (CRIU-friendly GPU state)
         2. Write ready file (triggers DaemonSet checkpoint via readiness probe)
-        3. Poll for signal file (checkpoint done) or restore marker (CRIU restored us)
+        3. Wait for watcher signal (checkpoint complete, restore complete, or failure)
         4. If restored: wake model and return True (caller proceeds with registration)
         5. If checkpoint done: return False (caller should exit)
         """
@@ -106,52 +81,96 @@ class CheckpointConfig:
         # Signal readiness
         with open(self.ready_file, "w") as f:
             f.write("ready")
+        self._install_signal_handlers()
         logger.info(
-            f"Ready for checkpoint. Waiting for signal: {self.signal_file} "
-            f"or restore marker: {self.restore_marker}"
+            "Ready for checkpoint. Waiting for watcher signal "
+            "(SIGUSR1=checkpoint complete, SIGUSR2=restore complete, SIGTERM=failure)"
         )
 
-        # Poll for signal or restore
-        while True:
-            if os.path.exists(self.restore_marker):
-                logger.info(f"Restore detected (marker: {self.restore_marker})")
+        try:
+            event = await self._wait_for_watcher_signal()
+            if event == "restore":
+                logger.info("Restore signal detected (SIGUSR2)")
                 logger.info("Waking up model after restore")
                 await engine_client.wake_up()
                 return True
 
-            if os.path.exists(self.signal_file):
-                try:
-                    signal = self._read_status_file(self.signal_file)
-                except (OSError, ValueError, json.JSONDecodeError) as exc:
-                    raise RuntimeError(
-                        f"Invalid checkpoint signal file {self.signal_file}: {exc}"
-                    ) from exc
+            if event == "checkpoint":
+                logger.info("Checkpoint completion signal detected (SIGUSR1)")
+                return False
 
-                if signal["success"]:
-                    logger.info(f"Checkpoint complete (signal: {self.signal_file})")
-                    return False
+            raise RuntimeError("Checkpoint failed (received SIGTERM from watcher)")
+        finally:
+            self._remove_signal_handlers()
 
-                raise RuntimeError(
-                    f"Checkpoint failed (signal: {self.signal_file}): "
-                    f"{signal.get('error', 'unknown error')}"
-                )
+    def _install_signal_handlers(self) -> None:
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(signal.SIGUSR1, self._checkpoint_done.set)
+        loop.add_signal_handler(signal.SIGUSR2, self._restore_done.set)
+        loop.add_signal_handler(signal.SIGTERM, self._checkpoint_failed.set)
 
-            await asyncio.sleep(1)
+    def _remove_signal_handlers(self) -> None:
+        loop = asyncio.get_running_loop()
+        loop.remove_signal_handler(signal.SIGUSR1)
+        loop.remove_signal_handler(signal.SIGUSR2)
+        loop.remove_signal_handler(signal.SIGTERM)
+
+    async def _wait_for_watcher_signal(self) -> str:
+        waiters = {
+            asyncio.create_task(self._checkpoint_done.wait()): "checkpoint",
+            asyncio.create_task(self._restore_done.wait()): "restore",
+            asyncio.create_task(self._checkpoint_failed.wait()): "failed",
+        }
+        try:
+            done, pending = await asyncio.wait(
+                waiters.keys(), return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+            winner = done.pop()
+            await winner
+            return waiters[winner]
+        finally:
+            for task in waiters:
+                if not task.done():
+                    task.cancel()
 
 
-def get_checkpoint_config() -> Optional[CheckpointConfig]:
-    """Returns CheckpointConfig if in checkpoint mode, None otherwise.
+def get_checkpoint_config() -> tuple[bool, Optional[CheckpointConfig]]:
+    """Resolve checkpoint configuration, handling early-exit and cold-start cases.
 
-    Checkpoint mode is detected by DYN_CHECKPOINT_SIGNAL_FILE being set.
-    If in checkpoint mode, all required env vars must be present — raises
-    EnvironmentError if any are missing.
+    Checkpoint mode is detected by DYN_READY_FOR_CHECKPOINT_FILE being set.
+
+    Returns:
+        (early_exit, config) where:
+        - early_exit=True, config=None: checkpoint job re-run, checkpoint already
+          exists — caller should return immediately.
+        - early_exit=False, config=None: not in checkpoint mode, or regular worker
+          with no checkpoint available yet — cold-start normally.
+        - early_exit=False, config=CheckpointConfig: checkpoint lifecycle should run.
     """
-    if "DYN_CHECKPOINT_SIGNAL_FILE" not in os.environ:
-        return None
+    if "DYN_READY_FOR_CHECKPOINT_FILE" not in os.environ:
+        return False, None
 
-    missing = [v for v in _REQUIRED_ENV_VARS if v not in os.environ]
-    if missing:
-        raise EnvironmentError(
-            f"Checkpoint mode requires these environment variables: {', '.join(missing)}"
-        )
-    return CheckpointConfig()
+    # Validate checkpoint location: either a full location or path + hash must be set
+    if "DYN_CHECKPOINT_LOCATION" not in os.environ:
+        path = os.environ.get("DYN_CHECKPOINT_PATH", "")
+        hash_ = os.environ.get("DYN_CHECKPOINT_HASH", "")
+        if not path or not hash_:
+            raise EnvironmentError(
+                "Checkpoint mode requires either DYN_CHECKPOINT_LOCATION or both "
+                "DYN_CHECKPOINT_PATH and DYN_CHECKPOINT_HASH"
+            )
+
+    cfg = CheckpointConfig()
+    checkpoint_exists = cfg.checkpoint_exists()
+
+    if cfg.is_checkpoint_job and checkpoint_exists:
+        # Idempotent checkpoint job re-run: checkpoint already exists.
+        return True, None
+
+    if not cfg.is_checkpoint_job and not checkpoint_exists:
+        # Regular worker with no checkpoint available yet: cold-start normally.
+        return False, None
+
+    return False, cfg

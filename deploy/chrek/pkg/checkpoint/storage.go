@@ -74,7 +74,8 @@ func LoadDescriptors(checkpointDir string) ([]string, error) {
 	return descriptors, nil
 }
 
-// ListCheckpoints returns all checkpoint IDs in the base directory.
+// ListCheckpoints returns all completed checkpoint IDs in the base directory.
+// Directories with the tmp_ prefix are in-progress and excluded.
 func ListCheckpoints(baseDir string) ([]string, error) {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
@@ -83,11 +84,10 @@ func ListCheckpoints(baseDir string) ([]string, error) {
 
 	var checkpoints []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || entry.Name() == TmpCheckpointDir {
 			continue
 		}
 
-		// Check if manifest file exists.
 		manifestPath := filepath.Join(baseDir, entry.Name(), CheckpointManifestFilename)
 		if _, err := os.Stat(manifestPath); err == nil {
 			checkpoints = append(checkpoints, entry.Name())
@@ -98,8 +98,8 @@ func ListCheckpoints(baseDir string) ([]string, error) {
 }
 
 // DeleteCheckpoint removes a checkpoint directory.
-func DeleteCheckpoint(baseDir, checkpointID string) error {
-	checkpointDir := filepath.Join(baseDir, checkpointID)
+func DeleteCheckpoint(baseDir, checkpointHash string) error {
+	checkpointDir := filepath.Join(baseDir, checkpointHash)
 	// Ensure resolved path is within baseDir to prevent path traversal
 	absBase, _ := filepath.Abs(baseDir)
 	absDir, _ := filepath.Abs(checkpointDir)

@@ -65,7 +65,6 @@ See `values.yaml` for all configuration options.
 | `storage.pvc.storageClass` | Storage class name | `""` (default) |
 | `daemonset.image.repository` | DaemonSet image repository | `nvidia/chrek-agent` |
 | `daemonset.nodeSelector` | Node selector for GPU nodes | `nvidia.com/gpu.present: "true"` |
-| `daemonset.runtimeClassName` | Runtime class for GPU access | `nvidia` |
 | `daemonset.criu.timeout` | CRIU timeout in seconds | `"21600"` (6 hours) |
 | `daemonset.criu.ghostLimit` | CRIU ghost file size limit | `"512MB"` |
 | `rbac.namespaceRestricted` | Use namespace-scoped RBAC | `true` |

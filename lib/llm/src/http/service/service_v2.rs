@@ -103,16 +103,6 @@ impl State {
         )
     }
 
-    /// Create state with a custom response storage backend
-    pub fn with_response_storage(
-        manager: Arc<ModelManager>,
-        store: kv::Manager,
-        cancel_token: CancellationToken,
-        response_storage: Arc<dyn ResponseStorage>,
-    ) -> Self {
-        Self::with_options(manager, store, cancel_token, response_storage, false)
-    }
-
     /// Create state with full configuration
     fn with_options(
         manager: Arc<ModelManager>,

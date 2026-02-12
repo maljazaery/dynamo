@@ -26,7 +26,7 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/server"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/api"
 )
 
 // Config holds watcher configuration.
@@ -41,7 +41,7 @@ type Config struct {
 type Watcher struct {
 	config          Config
 	clientset       kubernetes.Interface
-	agentClient     *server.Client
+	agentClient     *api.Client
 	discoveryClient *containerd.DiscoveryClient
 	log             logr.Logger
 
@@ -70,7 +70,7 @@ func NewWatcher(cfg Config, discoveryClient *containerd.DiscoveryClient, log log
 	return &Watcher{
 		config:          cfg,
 		clientset:       clientset,
-		agentClient:     server.NewClient(cfg.AgentSocketPath),
+		agentClient:     api.NewClient(cfg.AgentSocketPath),
 		discoveryClient: discoveryClient,
 		log:             log,
 		inFlight:        make(map[string]struct{}),
@@ -396,7 +396,7 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		return
 	}
 
-	req := server.CheckpointAPIRequest{
+	req := api.CheckpointAPIRequest{
 		ContainerID:    containerID,
 		ContainerName:  containerName,
 		CheckpointHash: checkpointHash,

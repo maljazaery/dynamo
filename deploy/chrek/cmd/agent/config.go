@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/server"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/api"
 )
 
 // ConfigMapPath is the default path where the ConfigMap is mounted.
@@ -81,7 +81,7 @@ func (c *AgentConfig) loadEnvOverrides() {
 
 func (c *FullConfig) applyDefaults() {
 	if c.Agent.SocketPath == "" {
-		c.Agent.SocketPath = server.DefaultSocketPath
+		c.Agent.SocketPath = api.DefaultSocketPath
 	}
 }
 

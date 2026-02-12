@@ -21,7 +21,7 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/server"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/api"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/watcher"
 )
 
@@ -54,12 +54,12 @@ func main() {
 		rootLog.WithName("restorer"),
 	)
 
-	serverCfg := server.Config{
+	serverCfg := api.Config{
 		SocketPath:     cfg.Agent.SocketPath,
 		NodeName:       cfg.Agent.NodeName,
 		CheckpointSpec: &cfg.Checkpoint,
 	}
-	srv := server.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
+	srv := api.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

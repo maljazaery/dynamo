@@ -134,7 +134,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	log.Info("Executing go-criu Restore call")
 	if err := c.Restore(criuOpts, notify); err != nil {
 		log.Error(err, "go-criu Restore returned error")
-		logCRIUErrors(opts.CheckpointPath, opts.WorkDir, log)
+		criu.LogRestoreErrors(opts.CheckpointPath, opts.WorkDir, log)
 		return 0, 0, fmt.Errorf("CRIU restore failed: %w", err)
 	}
 	log.Info("CRIU restore completed", "pid", notify.restoredPID, "duration", time.Since(restoreStart))
@@ -325,29 +325,6 @@ func remountCgroupFS(rw bool, log logr.Logger) error {
 	}
 	log.V(1).Info("Remounted /sys/fs/cgroup", "mode", mode)
 	return nil
-}
-
-func logCRIUErrors(checkpointPath, workDir string, log logr.Logger) {
-	candidates := make([]string, 0, 2)
-	if workDir != "" {
-		candidates = append(candidates, filepath.Join(workDir, restoreLogFile))
-	}
-	candidates = append(candidates, filepath.Join(checkpointPath, restoreLogFile))
-
-	for _, logPath := range candidates {
-		data, err := os.ReadFile(logPath)
-		if err != nil {
-			continue
-		}
-		log.Info("=== CRIU RESTORE LOG ===")
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" {
-				log.Info(line)
-			}
-		}
-		log.Info("=== END CRIU RESTORE LOG ===")
-		return
-	}
 }
 
 type restoreNotify struct {

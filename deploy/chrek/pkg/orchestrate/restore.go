@@ -16,6 +16,7 @@ import (
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/filesystem"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
@@ -315,7 +316,7 @@ func logRestoredProcessDiagnostics(procRoot string, pid int, restoreLogPath stri
 		entry.Info("PID 1 children in restored namespace", "children", strings.TrimSpace(string(data)))
 	}
 
-	logCRIURestoreSummary(restoreLogPath, entry)
+	criu.LogRestoreSummary(restoreLogPath, entry)
 }
 
 func parseProcExitCodeRaw(statLine string) (int, error) {
@@ -343,52 +344,4 @@ func decodeProcExitCode(raw int) (exitStatus int, termSignal int, coreDumped boo
 	termSignal = raw & 0x7f
 	coreDumped = (raw & 0x80) != 0
 	return exitStatus, termSignal, coreDumped
-}
-
-func logCRIURestoreSummary(path string, log logr.Logger) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Error(err, "Failed to read CRIU restore log", "path", path)
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	keyLines := make([]string, 0, 64)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		lower := strings.ToLower(trimmed)
-		if strings.Contains(lower, "error") ||
-			strings.Contains(lower, "warn") ||
-			strings.Contains(lower, "fail") ||
-			strings.Contains(lower, "cuda") ||
-			strings.Contains(lower, "iptables") ||
-			strings.Contains(lower, "restore finished successfully") ||
-			strings.Contains(lower, "tasks resumed") {
-			keyLines = append(keyLines, trimmed)
-			if len(keyLines) == 80 {
-				break
-			}
-		}
-	}
-	if len(keyLines) > 0 {
-		log.Info("CRIU restore key lines", "path", path, "lines", strings.Join(keyLines, "\n"))
-	}
-
-	tail := make([]string, 0, 40)
-	for i := len(lines) - 1; i >= 0 && len(tail) < 40; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "" {
-			continue
-		}
-		tail = append(tail, trimmed)
-	}
-	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
-		tail[i], tail[j] = tail[j], tail[i]
-	}
-	if len(tail) > 0 {
-		log.Info("CRIU restore tail", "path", path, "lines", strings.Join(tail, "\n"))
-	}
 }

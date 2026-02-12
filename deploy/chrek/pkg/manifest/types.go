@@ -158,14 +158,12 @@ func NewNamespaceManifest(namespaces map[namespace.Type]*namespace.NamespaceInfo
 type CUDAManifest struct {
 	PIDs           []int    `yaml:"pids"`
 	SourceGPUUUIDs []string `yaml:"sourceGpuUuids"`
-	Locked         bool     `yaml:"locked"`
 }
 
-func NewCUDAManifest(pids []int, sourceGPUUUIDs []string, locked bool) CUDAManifest {
+func NewCUDAManifest(pids []int, sourceGPUUUIDs []string) CUDAManifest {
 	return CUDAManifest{
 		PIDs:           append([]int(nil), pids...),
 		SourceGPUUUIDs: append([]string(nil), sourceGPUUUIDs...),
-		Locked:         locked,
 	}
 }
 

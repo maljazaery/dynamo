@@ -50,7 +50,7 @@ type containerSnapshot struct {
 	UpperDir   string
 	OCISpec    *specs.Spec
 	MountInfo  []mounts.Info
-	Namespaces map[namespace.Type]*namespace.Info
+	Namespaces map[namespace.Type]*namespace.NamespaceInfo
 }
 
 // Checkpointer performs CRIU checkpoint operations.
@@ -197,7 +197,7 @@ func (c *Checkpointer) configure(
 		manifest.NewCRIUDumpManifest(criuOpts, spec.CRIU),
 		manifest.NewSourcePodManifest(req.ContainerID, state.PID, req.NodeName, req.PodName, req.PodNamespace),
 		manifest.NewFilesystemManifest(spec.RootfsExclusions, state.UpperDir, state.OCISpec),
-		manifest.NewNamespaceEntries(state.Namespaces),
+		manifest.NewNamespaceManifest(state.Namespaces),
 	)
 
 	cudaReq := cuda.CheckpointRequest{

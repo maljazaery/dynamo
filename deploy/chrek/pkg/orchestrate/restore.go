@@ -94,8 +94,8 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 	r.log.Info("Resolved placeholder container", "pid", placeholderPID)
 
 	cudaDeviceMap := ""
-	if m.CUDARestore != nil && len(m.CUDARestore.PIDs) > 0 {
-		if len(m.CUDARestore.SourceGPUUUIDs) == 0 {
+	if !m.CUDA.IsEmpty() {
+		if len(m.CUDA.SourceGPUUUIDs) == 0 {
 			return nil, fmt.Errorf("missing source GPU UUIDs in checkpoint manifest")
 		}
 		targetGPUUUIDs, err := cuda.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, containerName, r.log)
@@ -105,7 +105,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		if len(targetGPUUUIDs) == 0 {
 			return nil, fmt.Errorf("missing target GPU UUIDs for %s/%s container %s", req.PodNamespace, req.PodName, containerName)
 		}
-		cudaDeviceMap, err = cuda.BuildDeviceMap(m.CUDARestore.SourceGPUUUIDs, targetGPUUUIDs)
+		cudaDeviceMap, err = cuda.BuildDeviceMap(m.CUDA.SourceGPUUUIDs, targetGPUUUIDs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build CUDA device map: %w", err)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -55,7 +56,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 		"ext_mounts", len(m.CRIUDump.ExtMnt),
 		"criu_log_level", m.CRIUDump.CRIU.LogLevel,
 		"manage_cgroups_mode", m.CRIUDump.CRIU.ManageCgroupsMode,
-		"checkpoint_has_cuda", m.CUDARestore != nil,
+		"checkpoint_has_cuda", !m.CUDA.IsEmpty(),
 	)
 
 	log.Info("Remounting /proc/sys read-write")
@@ -207,22 +208,28 @@ func generateExtMountMaps(m *manifest.CheckpointManifest) ([]*criurpc.ExtMountMa
 	}}
 	added := map[string]struct{}{"/": {}}
 
-	for _, mount := range m.CRIUDump.ExtMnt {
-		if mount.Key == "" || mount.Key == "/" {
+	keys := make([]string, 0, len(m.CRIUDump.ExtMnt))
+	for key := range m.CRIUDump.ExtMnt {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		if key == "" || key == "/" {
 			continue
 		}
-		if _, exists := added[mount.Key]; exists {
+		if _, exists := added[key]; exists {
 			continue
 		}
-		val := mount.Val
+		val := m.CRIUDump.ExtMnt[key]
 		if val == "" {
-			val = mount.Key
+			val = key
 		}
 		maps = append(maps, &criurpc.ExtMountMap{
-			Key: proto.String(mount.Key),
+			Key: proto.String(key),
 			Val: proto.String(val),
 		})
-		added[mount.Key] = struct{}{}
+		added[key] = struct{}{}
 	}
 
 	return maps, nil

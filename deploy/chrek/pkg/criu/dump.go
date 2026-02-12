@@ -41,7 +41,7 @@ func BuildDumpOptions(
 	rootFS string,
 	mountInfo []mounts.Info,
 	ociSpec *specs.Spec,
-	namespaces map[namespace.Type]*namespace.Info,
+	namespaces map[namespace.Type]*namespace.NamespaceInfo,
 	log logr.Logger,
 ) (*criurpc.CriuOpts, error) {
 	mountPolicy := mounts.BuildPolicy(mountInfo, ociSpec, rootFS)
@@ -120,7 +120,7 @@ func ExecuteDump(criuOpts *criurpc.CriuOpts, checkpointDir string, log logr.Logg
 	return criuDumpDuration, nil
 }
 
-func buildExternalNamespaces(namespaces map[namespace.Type]*namespace.Info, log logr.Logger) []string {
+func buildExternalNamespaces(namespaces map[namespace.Type]*namespace.NamespaceInfo, log logr.Logger) []string {
 	external := make([]string, 0, 1)
 
 	if netNs, ok := namespaces[namespace.Net]; ok {

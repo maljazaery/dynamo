@@ -3,6 +3,7 @@
 package manifest
 
 import (
+	"sort"
 	"time"
 
 	criurpc "github.com/checkpoint-restore/go-criu/v8/rpc"
@@ -17,11 +18,11 @@ type CheckpointManifest struct {
 	CheckpointHash string    `yaml:"checkpointHash"`
 	CreatedAt      time.Time `yaml:"createdAt"`
 
-	CRIUDump    CRIUDumpManifest     `yaml:"criuDump"`
-	K8s         SourcePodManifest    `yaml:"k8s"`
-	Filesystem  FilesystemManifest   `yaml:"filesystem"`
-	Namespaces  []NamespaceEntry     `yaml:"namespaces"`
-	CUDARestore *CUDARestoreManifest `yaml:"cudaRestore,omitempty"`
+	CRIUDump   CRIUDumpManifest   `yaml:"criuDump"`
+	K8s        SourcePodManifest  `yaml:"k8s"`
+	Filesystem FilesystemManifest `yaml:"filesystem"`
+	Namespaces NamespaceManifest  `yaml:"namespaces"`
+	CUDA       CUDAManifest       `yaml:"cudaRestore,omitempty"`
 }
 
 // NewCheckpointManifest assembles a CheckpointManifest from per-module builders.
@@ -30,7 +31,7 @@ func NewCheckpointManifest(
 	criuDump CRIUDumpManifest,
 	k8s SourcePodManifest,
 	filesystem FilesystemManifest,
-	namespaces []NamespaceEntry,
+	namespaces NamespaceManifest,
 ) *CheckpointManifest {
 	return &CheckpointManifest{
 		CheckpointHash: checkpointHash,
@@ -45,15 +46,9 @@ func NewCheckpointManifest(
 // CRIUDumpManifest stores the resolved dump-time CRIU mount plan used for restore.
 type CRIUDumpManifest struct {
 	CRIU     config.CRIUSettings `yaml:"criu"`
-	ExtMnt   []ExtMountEntry     `yaml:"extMnt,omitempty"`
+	ExtMnt   map[string]string   `yaml:"extMnt,omitempty"`
 	External []string            `yaml:"external,omitempty"`
 	SkipMnt  []string            `yaml:"skipMnt,omitempty"`
-}
-
-// ExtMountEntry is a serializable CRIU ext-mount entry in checkpoint manifests.
-type ExtMountEntry struct {
-	Key string `yaml:"key"`
-	Val string `yaml:"val"`
 }
 
 // NewCRIUDumpManifest serializes resolved dump options for restore.
@@ -63,14 +58,15 @@ func NewCRIUDumpManifest(criuOpts *criurpc.CriuOpts, settings config.CRIUSetting
 		return m
 	}
 
+	m.ExtMnt = make(map[string]string, len(criuOpts.ExtMnt))
 	for _, mount := range criuOpts.ExtMnt {
 		if mount == nil || mount.GetKey() == "" {
 			continue
 		}
-		m.ExtMnt = append(m.ExtMnt, ExtMountEntry{
-			Key: mount.GetKey(),
-			Val: mount.GetVal(),
-		})
+		m.ExtMnt[mount.GetKey()] = mount.GetVal()
+	}
+	if len(m.ExtMnt) == 0 {
+		m.ExtMnt = nil
 	}
 	m.External = append([]string(nil), criuOpts.External...)
 	m.SkipMnt = append([]string(nil), criuOpts.SkipMnt...)
@@ -130,33 +126,49 @@ func NewFilesystemManifest(exclusions config.FilesystemConfig, upperDir string, 
 	return meta
 }
 
-// NamespaceEntry stores namespace information saved in checkpoint manifests.
-type NamespaceEntry struct {
-	Type       string `yaml:"type"`
-	Inode      uint64 `yaml:"inode"`
-	IsExternal bool   `yaml:"isExternal"`
+type NamespaceManifest struct {
+	Entries []namespace.NamespaceInfo `yaml:"entries,omitempty"`
 }
 
-// NewNamespaceEntries constructs namespace manifest entries from introspected namespaces.
-func NewNamespaceEntries(namespaces map[namespace.Type]*namespace.Info) []NamespaceEntry {
+func NewNamespaceManifest(namespaces map[namespace.Type]*namespace.NamespaceInfo) NamespaceManifest {
+	manifest := NamespaceManifest{
+		Entries: make([]namespace.NamespaceInfo, 0, len(namespaces)),
+	}
 	if len(namespaces) == 0 {
-		return nil
+		return manifest
 	}
 
-	result := make([]NamespaceEntry, 0, len(namespaces))
-	for nsType, nsInfo := range namespaces {
-		result = append(result, NamespaceEntry{
-			Type:       string(nsType),
+	keys := make([]string, 0, len(namespaces))
+	for nsType := range namespaces {
+		keys = append(keys, string(nsType))
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		nsInfo := namespaces[namespace.Type(key)]
+		manifest.Entries = append(manifest.Entries, namespace.NamespaceInfo{
+			Type:       namespace.Type(key),
 			Inode:      nsInfo.Inode,
 			IsExternal: nsInfo.IsExternal,
 		})
 	}
-	return result
+	return manifest
 }
 
-// CUDARestoreManifest captures CUDA state from checkpoint time for restore.
-type CUDARestoreManifest struct {
+// CUDAManifest captures CUDA state from checkpoint time for restore.
+type CUDAManifest struct {
 	PIDs           []int    `yaml:"pids"`
 	SourceGPUUUIDs []string `yaml:"sourceGpuUuids"`
 	Locked         bool     `yaml:"locked"`
+}
+
+func NewCUDAManifest(pids []int, sourceGPUUUIDs []string, locked bool) CUDAManifest {
+	return CUDAManifest{
+		PIDs:           append([]int(nil), pids...),
+		SourceGPUUUIDs: append([]string(nil), sourceGPUUUIDs...),
+		Locked:         locked,
+	}
+}
+
+func (m CUDAManifest) IsEmpty() bool {
+	return len(m.PIDs) == 0
 }

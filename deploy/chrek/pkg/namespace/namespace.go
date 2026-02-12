@@ -22,15 +22,15 @@ const (
 	Cgroup Type = "cgroup"
 )
 
-// Info holds namespace identification information.
-type Info struct {
-	Type       Type
-	Inode      uint64
-	IsExternal bool // Whether NS is external (shared with pause container)
+// NamespaceInfo holds namespace identification information.
+type NamespaceInfo struct {
+	Type       Type   `yaml:"type"`
+	Inode      uint64 `yaml:"inode"`
+	IsExternal bool   `yaml:"isExternal"` // Whether NS is external (shared with pause container)
 }
 
-// GetInfo returns detailed namespace information for a process.
-func GetInfo(pid int, nsType Type) (*Info, error) {
+// getNamespaceInfo returns detailed namespace information for a process.
+func getNamespaceInfo(pid int, nsType Type) (*NamespaceInfo, error) {
 	nsPath := fmt.Sprintf("%s/%d/ns/%s", config.HostProcPath, pid, nsType)
 
 	var stat unix.Stat_t
@@ -46,7 +46,7 @@ func GetInfo(pid int, nsType Type) (*Info, error) {
 		isExternal = stat.Ino != initStat.Ino
 	}
 
-	return &Info{
+	return &NamespaceInfo{
 		Type:       nsType,
 		Inode:      stat.Ino,
 		IsExternal: isExternal,
@@ -54,12 +54,12 @@ func GetInfo(pid int, nsType Type) (*Info, error) {
 }
 
 // GetAll returns information about all namespaces for a process.
-func GetAll(pid int) (map[Type]*Info, error) {
+func GetAll(pid int) (map[Type]*NamespaceInfo, error) {
 	nsTypes := []Type{Net, PID, Mnt, UTS, IPC, User, Cgroup}
 
-	namespaces := make(map[Type]*Info)
+	namespaces := make(map[Type]*NamespaceInfo)
 	for _, nsType := range nsTypes {
-		if info, err := GetInfo(pid, nsType); err == nil {
+		if info, err := getNamespaceInfo(pid, nsType); err == nil {
 			namespaces[nsType] = info
 		}
 	}

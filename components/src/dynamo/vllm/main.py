@@ -121,14 +121,15 @@ async def worker():
 
     # CHECKPOINT MODE: Load engine BEFORE runtime creation
     # This allows checkpointing GPU state before runtime connections are established
-    engine_client = None
+    pre_created_engine = None
     if checkpoint_cfg is not None:
         logger.info("Checkpoint mode enabled (watcher-driven signals)")
 
         # Checkpoint mode requires sleep mode — enable before engine init
         config.engine_args.enable_sleep_mode = True
 
-        engine_client, _, _, _, _ = setup_vllm_engine(config)
+        pre_created_engine = setup_vllm_engine(config)
+        engine_client = pre_created_engine[0]
 
         if not await checkpoint_cfg.run_lifecycle(
             engine_client, CHECKPOINT_SLEEP_MODE_LEVEL
@@ -154,7 +155,7 @@ async def worker():
         or config.multimodal_encode_prefill_worker
     ):
         await init_multimodal_worker(
-            runtime, config, shutdown_event, pre_created_engine=engine_client
+            runtime, config, shutdown_event, pre_created_engine=pre_created_engine
         )
         logger.debug("init_multimodal_worker completed")
     elif config.omni:
@@ -162,12 +163,12 @@ async def worker():
         logger.debug("init_omni completed")
     elif config.is_prefill_worker:
         await init_prefill(
-            runtime, config, shutdown_event, pre_created_engine=engine_client
+            runtime, config, shutdown_event, pre_created_engine=pre_created_engine
         )
         logger.debug("init_prefill completed")
     else:
         await init(
-            runtime, config, shutdown_event, pre_created_engine=engine_client
+            runtime, config, shutdown_event, pre_created_engine=pre_created_engine
         )
         logger.debug("init completed")
 

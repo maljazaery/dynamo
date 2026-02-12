@@ -11,7 +11,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/mounts"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/namespace"
 )
@@ -47,7 +46,7 @@ func BuildDumpOptions(
 ) (*criurpc.CriuOpts, error) {
 	mountPolicy := mounts.BuildPolicy(mountInfo, ociSpec, rootFS)
 
-	extMnt := manifest.BuildExternalMountMaps(mountPolicy.Externalized)
+	extMnt := buildExternalMountMaps(mountPolicy.Externalized)
 	skipMnt := mountPolicy.Skipped
 	external := buildExternalNamespaces(namespaces, log)
 	log.V(1).Info("Resolved mount policy for CRIU dump",
@@ -130,4 +129,23 @@ func buildExternalNamespaces(namespaces map[namespace.Type]*namespace.Info, log 
 	}
 
 	return external
+}
+
+func buildExternalMountMaps(paths []string) []*criurpc.ExtMountMap {
+	extMnt := make([]*criurpc.ExtMountMap, 0, len(paths))
+	existing := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := existing[path]; ok {
+			continue
+		}
+		extMnt = append(extMnt, &criurpc.ExtMountMap{
+			Key: proto.String(path),
+			Val: proto.String(path),
+		})
+		existing[path] = struct{}{}
+	}
+	return extMnt
 }

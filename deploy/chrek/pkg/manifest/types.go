@@ -7,7 +7,6 @@ import (
 
 	criurpc "github.com/checkpoint-restore/go-criu/v8/rpc"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/namespace"
@@ -160,25 +159,4 @@ type CUDARestoreManifest struct {
 	PIDs           []int    `yaml:"pids"`
 	SourceGPUUUIDs []string `yaml:"sourceGpuUuids"`
 	Locked         bool     `yaml:"locked"`
-}
-
-// buildExternalMountMaps is used by criu/dump to serialize externalized mount paths.
-// Exported so pkg/criu can use it.
-func BuildExternalMountMaps(paths []string) []*criurpc.ExtMountMap {
-	extMnt := make([]*criurpc.ExtMountMap, 0, len(paths))
-	existing := make(map[string]struct{}, len(paths))
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
-		if _, ok := existing[path]; ok {
-			continue
-		}
-		extMnt = append(extMnt, &criurpc.ExtMountMap{
-			Key: proto.String(path),
-			Val: proto.String(path),
-		})
-		existing[path] = struct{}{}
-	}
-	return extMnt
 }

@@ -129,8 +129,6 @@ config:
     criu:
       # Ghost file size limit in bytes (512MB recommended for GPU workloads)
       ghostLimit: 536870912
-      # CRIU timeout in seconds (6 hours for large GPU checkpoints)
-      timeout: 21600
       # CRIU logging verbosity (0-4)
       logLevel: 4
       # CRIU work directory for temporary files

@@ -23,15 +23,11 @@ type cudaCheckpointAction string
 
 const (
 	cudaCheckpointBinary = "/usr/local/sbin/cuda-checkpoint"
-	podResourcesSocket   = "/var/lib/kubelet/pod-resources/kubelet.sock"
-	nvidiaGPUResource    = "nvidia.com/gpu"
-	hostCgroupPath       = "/sys/fs/cgroup"
-	cudaCheckpointTO     = 2 * time.Minute
-	cudaDiscoverTO       = 30 * time.Second
-	cudaDiscoverTick     = 1 * time.Second
-	cudaStateCheckTO     = 2 * time.Second
-	podGPUDiscoverTO     = 30 * time.Second
-	podGPUDiscoverTick   = 1 * time.Second
+	podResourcesSocket  = "/var/lib/kubelet/pod-resources/kubelet.sock"
+	nvidiaGPUResource   = "nvidia.com/gpu"
+	hostCgroupPath      = "/sys/fs/cgroup"
+	cudaDiscoverTick    = 1 * time.Second
+	podGPUDiscoverTick  = 1 * time.Second
 
 	cudaActionLock       cudaCheckpointAction = "lock"
 	cudaActionCheckpoint cudaCheckpointAction = "checkpoint"
@@ -176,9 +172,6 @@ func RestoreExternalCUDA(ctx context.Context, manifest *CheckpointManifest, podN
 }
 
 func findRestoredCUDAPIDs(ctx context.Context, cgroupPath string, restoredPID int, log logr.Logger) ([]int, error) {
-	deadlineCtx, cancel := context.WithTimeout(ctx, cudaDiscoverTO)
-	defer cancel()
-
 	ticker := time.NewTicker(cudaDiscoverTick)
 	defer ticker.Stop()
 
@@ -206,7 +199,7 @@ func findRestoredCUDAPIDs(ctx context.Context, cgroupPath string, restoredPID in
 
 		cudaPIDs := make([]int, 0, len(candidates))
 		for _, pid := range candidates {
-			ok, err := isCUDAProcess(deadlineCtx, pid)
+			ok, err := isCUDAProcess(ctx, pid)
 			if err != nil {
 				log.V(1).Info("Failed CUDA state probe", "pid", pid, "error", err)
 				continue
@@ -224,14 +217,13 @@ func findRestoredCUDAPIDs(ctx context.Context, cgroupPath string, restoredPID in
 			"cuda_pids", len(cudaPIDs),
 			"sample_pids", truncateIntSlice(cgroupPIDs, 16),
 			"sample_cuda", truncateIntSlice(cudaPIDs, 16),
-			"discover_tmo", cudaDiscoverTO.String(),
 		)
 		if len(cudaPIDs) > 0 {
 			return cudaPIDs, nil
 		}
 
 		select {
-		case <-deadlineCtx.Done():
+		case <-ctx.Done():
 			return nil, nil
 		case <-ticker.C:
 		}
@@ -243,13 +235,10 @@ func isCUDAProcess(ctx context.Context, pid int) (bool, error) {
 		return false, nil
 	}
 
-	probeCtx, cancel := context.WithTimeout(ctx, cudaStateCheckTO)
-	defer cancel()
-
-	cmd := exec.CommandContext(probeCtx, cudaCheckpointBinary, "--get-state", "--pid", strconv.Itoa(pid))
+	cmd := exec.CommandContext(ctx, cudaCheckpointBinary, "--get-state", "--pid", strconv.Itoa(pid))
 	if err := cmd.Run(); err != nil {
-		if probeCtx.Err() != nil {
-			return false, probeCtx.Err()
+		if ctx.Err() != nil {
+			return false, ctx.Err()
 		}
 		return false, nil
 	}
@@ -264,15 +253,12 @@ func truncateIntSlice(values []int, limit int) []int {
 }
 
 func runCudaCheckpoint(ctx context.Context, pid int, action cudaCheckpointAction, deviceMap string) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, cudaCheckpointTO)
-	defer cancel()
-
 	args := []string{"--action", string(action), "--pid", strconv.Itoa(pid)}
 	if action == cudaActionRestore && deviceMap != "" {
 		args = append(args, "--device-map", deviceMap)
 	}
 
-	cmd := exec.CommandContext(timeoutCtx, cudaCheckpointBinary, args...)
+	cmd := exec.CommandContext(ctx, cudaCheckpointBinary, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("cuda-checkpoint %v failed for pid %d: %w (output: %s)", args, pid, err, strings.TrimSpace(string(output)))
@@ -353,10 +339,8 @@ func getPodGPUUUIDs(ctx context.Context, podName, podNamespace, containerName st
 		return nil, nil
 	}
 
-	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer dialCancel()
 	conn, err := grpc.DialContext(
-		dialCtx,
+		ctx,
 		"unix://"+podResourcesSocket,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
@@ -367,9 +351,7 @@ func getPodGPUUUIDs(ctx context.Context, podName, podNamespace, containerName st
 	defer conn.Close()
 
 	client := podresourcesv1.NewPodResourcesListerClient(conn)
-	listCtx, listCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer listCancel()
-	resp, err := client.List(listCtx, &podresourcesv1.ListPodResourcesRequest{})
+	resp, err := client.List(ctx, &podresourcesv1.ListPodResourcesRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -394,9 +376,6 @@ func getPodGPUUUIDs(ctx context.Context, podName, podNamespace, containerName st
 }
 
 func getPodGPUUUIDsWithRetry(ctx context.Context, podName, podNamespace, containerName string, log logr.Logger) ([]string, error) {
-	deadlineCtx, cancel := context.WithTimeout(ctx, podGPUDiscoverTO)
-	defer cancel()
-
 	ticker := time.NewTicker(podGPUDiscoverTick)
 	defer ticker.Stop()
 
@@ -404,7 +383,7 @@ func getPodGPUUUIDsWithRetry(ctx context.Context, podName, podNamespace, contain
 	var lastErr error
 	for {
 		attempt++
-		uuids, err := getPodGPUUUIDs(deadlineCtx, podName, podNamespace, containerName)
+		uuids, err := getPodGPUUUIDs(ctx, podName, podNamespace, containerName)
 		if err == nil && len(uuids) > 0 {
 			return uuids, nil
 		}
@@ -425,7 +404,7 @@ func getPodGPUUUIDsWithRetry(ctx context.Context, podName, podNamespace, contain
 		)
 
 		select {
-		case <-deadlineCtx.Done():
+		case <-ctx.Done():
 			if lastErr != nil {
 				return nil, lastErr
 			}

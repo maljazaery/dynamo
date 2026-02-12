@@ -27,7 +27,6 @@ data:
       criu:
         # RPC options
         ghostLimit: {{ .Values.config.checkpoint.criu.ghostLimit }}
-        timeout: {{ .Values.config.checkpoint.criu.timeout }}
         logLevel: {{ .Values.config.checkpoint.criu.logLevel }}
         workDir: {{ .Values.config.checkpoint.criu.workDir | quote }}
         # K8s-specific options

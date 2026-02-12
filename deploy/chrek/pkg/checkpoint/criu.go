@@ -24,10 +24,6 @@ type CRIUSettings struct {
 	// 512MB is recommended for GPU workloads with large memory allocations.
 	GhostLimit uint32 `yaml:"ghostLimit"`
 
-	// Timeout is the CRIU operation timeout in seconds.
-	// 6 hours (21600s) is recommended for large GPU model checkpoints.
-	Timeout uint32 `yaml:"timeout"`
-
 	// LogLevel is the CRIU logging verbosity (0-4).
 	LogLevel int32 `yaml:"logLevel"`
 
@@ -197,9 +193,6 @@ func BuildCRIUDumpOptions(
 	// Optional numeric options
 	if settings.GhostLimit > 0 {
 		criuOpts.GhostLimit = proto.Uint32(settings.GhostLimit)
-	}
-	if settings.Timeout > 0 {
-		criuOpts.Timeout = proto.Uint32(settings.Timeout)
 	}
 
 	return criuOpts, nil

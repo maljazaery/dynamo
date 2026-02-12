@@ -19,9 +19,6 @@ import (
 const (
 	// DefaultSocketPath is the default UDS socket path.
 	DefaultSocketPath = "/var/run/chrek/chrek.sock"
-
-	// MinWriteTimeout is the minimum write timeout for the HTTP server.
-	MinWriteTimeout = 300 * time.Second
 )
 
 // ServerConfig holds configuration for the UDS server.
@@ -29,7 +26,6 @@ type ServerConfig struct {
 	SocketPath     string
 	NodeName       string
 	CheckpointSpec *checkpoint.CheckpointSpec
-	CRIUTimeout    uint32 // CRIU timeout in seconds (from config)
 }
 
 // Server is the HTTP-over-UDS server for checkpoint and restore operations.
@@ -55,18 +51,8 @@ func NewServer(cfg ServerConfig, checkpointer *checkpoint.Checkpointer, restorer
 	mux.HandleFunc("/checkpoint", s.handleCheckpoint)
 	mux.HandleFunc("/restore", s.handleRestore)
 
-	// WriteTimeout must exceed the CRIU timeout since checkpoint/restore
-	// blocks until completion. Add 60s buffer for pre/post work.
-	writeTimeout := time.Duration(cfg.CRIUTimeout)*time.Second + 60*time.Second
-	if writeTimeout < MinWriteTimeout {
-		writeTimeout = MinWriteTimeout
-	}
-
 	s.httpServer = &http.Server{
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: writeTimeout,
-		IdleTimeout:  120 * time.Second,
+		Handler: mux,
 	}
 
 	return s

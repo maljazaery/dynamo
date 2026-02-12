@@ -49,13 +49,10 @@ const (
 	procStdoutPath      = "/proc/1/fd/1"
 	procStderrPath      = "/proc/1/fd/2"
 	criuBinaryPath      = "/usr/local/sbin/criu"
-	cudaCheckpointBin   = "/usr/local/sbin/cuda-checkpoint"
-	cudaActionRestore   = "restore"
-	cudaActionUnlock    = "unlock"
-	cudaDiscoverTimeout = 30 * time.Second
-	cudaDiscoverTick    = 1 * time.Second
-	cudaActionTimeout   = 2 * time.Minute
-	cudaStateTimeout    = 2 * time.Second
+	cudaCheckpointBin = "/usr/local/sbin/cuda-checkpoint"
+	cudaActionRestore = "restore"
+	cudaActionUnlock  = "unlock"
+	cudaDiscoverTick  = 1 * time.Second
 )
 
 func main() {
@@ -143,7 +140,6 @@ func run(checkpointPath, workDir, cudaDeviceMap string, log logr.Logger) error {
 	}
 	log.Info("Loaded checkpoint manifest",
 		"ext_mounts", len(manifest.CRIUDump.ExtMnt),
-		"criu_timeout_seconds", manifest.CRIUDump.CRIU.Timeout,
 		"criu_log_level", manifest.CRIUDump.CRIU.LogLevel,
 		"manage_cgroups_mode", manifest.CRIUDump.CRIU.ManageCgroupsMode,
 		"checkpoint_has_cuda", manifest.ExternalRestore != nil && manifest.ExternalRestore.CUDA != nil,
@@ -334,7 +330,6 @@ func restoreCUDA(ctx context.Context, manifest *checkpoint.CheckpointManifest, r
 		"device_map", deviceMap,
 	)
 
-	deadline := time.Now().Add(cudaDiscoverTimeout)
 	attempt := 0
 	for {
 		attempt++
@@ -375,15 +370,11 @@ func restoreCUDA(ctx context.Context, manifest *checkpoint.CheckpointManifest, r
 			return nil
 		}
 
-		if time.Now().After(deadline) {
-			log.Info("CUDA restore PID discovery timed out",
-				"restored_pid", restoredPID,
-				"attempts", attempt,
-				"deadline", deadline.Format(time.RFC3339Nano),
-			)
-			return fmt.Errorf("checkpoint captured %d CUDA PIDs but none found in restored process tree rooted at PID %d", len(manifest.ExternalRestore.CUDA.PIDs), restoredPID)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("checkpoint captured %d CUDA PIDs but none found in restored process tree rooted at PID %d: %w", len(manifest.ExternalRestore.CUDA.PIDs), restoredPID, ctx.Err())
+		case <-time.After(cudaDiscoverTick):
 		}
-		time.Sleep(cudaDiscoverTick)
 	}
 }
 
@@ -428,13 +419,10 @@ func processTreePIDs(rootPID int) []int {
 }
 
 func isCUDAProcess(ctx context.Context, pid int) (bool, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, cudaStateTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(probeCtx, cudaCheckpointBin, "--get-state", "--pid", strconv.Itoa(pid))
+	cmd := exec.CommandContext(ctx, cudaCheckpointBin, "--get-state", "--pid", strconv.Itoa(pid))
 	if err := cmd.Run(); err != nil {
-		if probeCtx.Err() != nil {
-			return false, probeCtx.Err()
+		if ctx.Err() != nil {
+			return false, ctx.Err()
 		}
 		return false, nil
 	}
@@ -442,22 +430,16 @@ func isCUDAProcess(ctx context.Context, pid int) (bool, error) {
 }
 
 func runCudaCheckpoint(ctx context.Context, pid int, action string, deviceMap string, log logr.Logger) error {
-	actionCtx, cancel := context.WithTimeout(ctx, cudaActionTimeout)
-	defer cancel()
-
 	args := []string{"--action", action, "--pid", strconv.Itoa(pid)}
 	if action == cudaActionRestore && deviceMap != "" {
 		args = append(args, "--device-map", deviceMap)
 	}
-	cmd := exec.CommandContext(actionCtx, cudaCheckpointBin, args...)
+	cmd := exec.CommandContext(ctx, cudaCheckpointBin, args...)
 	start := time.Now()
 	output, err := cmd.CombinedOutput()
 	duration := time.Since(start)
 	out := strings.TrimSpace(string(output))
 	if err != nil {
-		if actionCtx.Err() != nil {
-			return fmt.Errorf("cuda-checkpoint %v timed out for pid %d after %s: %w (output: %s)", args, pid, duration, actionCtx.Err(), out)
-		}
 		return fmt.Errorf("cuda-checkpoint %v failed for pid %d after %s: %w (output: %s)", args, pid, duration, err, out)
 	}
 	log.Info("cuda-checkpoint command succeeded",
@@ -726,10 +708,6 @@ func buildRestoreOptions(manifest *checkpoint.CheckpointManifest, imageDirFD, wo
 	if workDirFD >= 0 {
 		opts.WorkDirFd = proto.Int32(workDirFD)
 	}
-	if settings.Timeout > 0 {
-		opts.Timeout = proto.Uint32(settings.Timeout)
-	}
-
 	return opts
 }
 

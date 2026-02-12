@@ -57,7 +57,6 @@ func main() {
 		SocketPath:     cfg.Agent.SocketPath,
 		NodeName:       cfg.Agent.NodeName,
 		CheckpointSpec: &cfg.Checkpoint,
-		CRIUTimeout:    cfg.Checkpoint.CRIU.Timeout,
 	}
 	srv := externalrestore.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
 

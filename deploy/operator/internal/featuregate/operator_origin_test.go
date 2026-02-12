@@ -20,13 +20,14 @@ package featuregate
 import (
 	"testing"
 
+	semver "github.com/Masterminds/semver/v3"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/consts"
 )
 
 func TestOperatorOriginFeatureGate_IsEnabled(t *testing.T) {
 	gate := OperatorOriginFeatureGate{
 		Name:             "TestFeature",
-		MinOriginVersion: "1.0.0-dev",
+		MinOriginVersion: *semver.MustParse("1.0.0-dev"),
 	}
 
 	tests := []struct {
@@ -119,22 +120,22 @@ func TestOperatorOriginFeatureGate_DifferentThresholds(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		minOriginVersion string
+		minOriginVersion semver.Version
 		want             bool
 	}{
 		{
 			name:             "threshold below origin = enabled",
-			minOriginVersion: "0.8.0",
+			minOriginVersion: *semver.MustParse("0.8.0"),
 			want:             true,
 		},
 		{
 			name:             "threshold equal to origin = enabled",
-			minOriginVersion: "0.9.0",
+			minOriginVersion: *semver.MustParse("0.9.0"),
 			want:             true,
 		},
 		{
 			name:             "threshold above origin = disabled",
-			minOriginVersion: "1.0.0",
+			minOriginVersion: *semver.MustParse("1.0.0"),
 			want:             false,
 		},
 	}
@@ -147,7 +148,7 @@ func TestOperatorOriginFeatureGate_DifferentThresholds(t *testing.T) {
 			}
 			got := gate.IsEnabled(annotations)
 			if got != tt.want {
-				t.Errorf("IsEnabled() with threshold %s = %v, want %v", tt.minOriginVersion, got, tt.want)
+				t.Errorf("IsEnabled() with threshold %v = %v, want %v", tt.minOriginVersion, got, tt.want)
 			}
 		})
 	}

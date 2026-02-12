@@ -17,6 +17,8 @@
 
 package featuregate
 
+import semver "github.com/Masterminds/semver/v3"
+
 // Feature gates gated on the operator origin version (the operator version that
 // first reconciled / created the DGD resource).
 
@@ -26,6 +28,6 @@ var (
 	// created by operator >= 1.0.0-dev.
 	VLLMMultiprocessing = OperatorOriginFeatureGate{
 		Name:             "VLLMMultiprocessing",
-		MinOriginVersion: "1.0.0-dev",
+		MinOriginVersion: *semver.MustParse("1.0.0-dev"),
 	}
 )

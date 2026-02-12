@@ -33,8 +33,8 @@ import (
 // When the annotation is absent (pre-upgrade DGD), IsEnabled returns false
 // to preserve backward compatibility.
 type OperatorOriginFeatureGate struct {
-	Name             string // Human-readable feature name (for logging)
-	MinOriginVersion string // Minimum origin version required (semver)
+	Name             string         // Human-readable feature name (for logging)
+	MinOriginVersion semver.Version // Minimum origin version required (semver)
 }
 
 // IsEnabled returns true if the origin version in annotations meets or exceeds
@@ -61,8 +61,7 @@ func (fg OperatorOriginFeatureGate) IsEnabled(annotations map[string]string) boo
 		return false
 	}
 
-	threshold, _ := semver.NewVersion(fg.MinOriginVersion)
-	enabled := version.Compare(threshold) >= 0
+	enabled := version.Compare(&fg.MinOriginVersion) >= 0
 
 	logger.V(1).Info("Feature gate evaluated",
 		"originVersion", originVersion,

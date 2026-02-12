@@ -93,8 +93,8 @@ func (w *Watcher) Start(ctx context.Context) error {
 
 	w.log.Info("Starting pod watcher",
 		"node", w.config.NodeName,
-		"checkpoint", checkpoint.KubeLabelCheckpointSource,
-		"restore", checkpoint.KubeLabelCheckpointRestore,
+		"checkpoint", checkpoint.KubeLabelIsCheckpointSource,
+		"restore", checkpoint.KubeLabelIsRestoreTarget,
 		"restore_enabled", w.agentClient != nil,
 		"socket_path", w.config.AgentSocketPath,
 	)
@@ -112,7 +112,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 
 	// --- Checkpoint informer: watches pods with checkpoint-source=true ---
 	checkpointSelector := labels.SelectorFromSet(labels.Set{
-		checkpoint.KubeLabelCheckpointSource: "true",
+		checkpoint.KubeLabelIsCheckpointSource: "true",
 	}).String()
 
 	ckptFactoryOpts := append([]informers.SharedInformerOption{
@@ -140,7 +140,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 	// --- Restore informer: watches pods with checkpoint-restore=true ---
 	if w.agentClient != nil {
 		restoreSelector := labels.SelectorFromSet(labels.Set{
-			checkpoint.KubeLabelCheckpointRestore: "true",
+			checkpoint.KubeLabelIsRestoreTarget: "true",
 		}).String()
 
 		restoreFactoryOpts := append([]informers.SharedInformerOption{

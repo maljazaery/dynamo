@@ -133,9 +133,9 @@ const (
 	// deploy/chrek/pkg/config/constants.go. If you change a value here, update there too.
 
 	// Kubernetes labels
-	KubeLabelCheckpointSource  = "nvidia.com/checkpoint-source"  // Pod label that triggers DaemonSet auto-checkpoint
-	KubeLabelCheckpointHash    = "nvidia.com/checkpoint-hash"    // Checkpoint identity hash (= DynamoCheckpoint CR name)
-	KubeLabelCheckpointRestore = "nvidia.com/checkpoint-restore" // Pod label that triggers DaemonSet auto-restore
+	KubeLabelIsCheckpointSource = "nvidia.com/chrek-is-checkpoint-source" // Pod label that triggers DaemonSet auto-checkpoint
+	KubeLabelCheckpointHash   = "nvidia.com/chrek-checkpoint-hash"      // Checkpoint identity hash (= DynamoCheckpoint CR name)
+	KubeLabelIsRestoreTarget    = "nvidia.com/chrek-is-restore-target"    // Pod label that triggers DaemonSet auto-restore
 
 	// Environment variables injected into pods
 	EnvCheckpointStorageType  = "DYN_CHECKPOINT_STORAGE_TYPE"   // Storage backend (pvc, s3, oci) — checkpoint job pods only

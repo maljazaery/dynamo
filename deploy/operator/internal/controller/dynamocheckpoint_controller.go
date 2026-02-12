@@ -258,7 +258,7 @@ func (r *CheckpointReconciler) buildCheckpointJob(ckpt *nvidiacomv1alpha1.Dynamo
 		podTemplate.Labels = make(map[string]string)
 	}
 	podTemplate.Labels[consts.KubeLabelCheckpointHash] = ckpt.Status.IdentityHash
-	podTemplate.Labels[consts.KubeLabelCheckpointSource] = "true"
+	podTemplate.Labels[consts.KubeLabelIsCheckpointSource] = "true"
 
 	// Add checkpoint env vars and volume mounts to main container
 	if len(podTemplate.Spec.Containers) > 0 {

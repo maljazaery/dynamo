@@ -1248,7 +1248,7 @@ func TestDynamoComponentDeploymentReconciler_generatePodTemplateSpec_RestoreLabe
 					DynamoNamespace: ptr.To("default"),
 					Labels: map[string]string{
 						commonconsts.KubeLabelDynamoGraphDeploymentName: "test-dgd",
-						commonconsts.KubeLabelCheckpointRestore:         commonconsts.KubeLabelValueTrue,
+						commonconsts.KubeLabelIsRestoreTarget:         commonconsts.KubeLabelValueTrue,
 					},
 					Checkpoint: &v1alpha1.ServiceCheckpointConfig{
 						Enabled:       true,
@@ -1312,8 +1312,8 @@ func TestDynamoComponentDeploymentReconciler_generatePodTemplateSpec_RestoreLabe
 			t.Fatalf("generatePodTemplateSpec failed: %v", err)
 		}
 
-		if got := podTemplateSpec.Labels[commonconsts.KubeLabelCheckpointRestore]; got != commonconsts.KubeLabelValueTrue {
-			t.Fatalf("expected %s label to be true, got %q", commonconsts.KubeLabelCheckpointRestore, got)
+		if got := podTemplateSpec.Labels[commonconsts.KubeLabelIsRestoreTarget]; got != commonconsts.KubeLabelValueTrue {
+			t.Fatalf("expected %s label to be true, got %q", commonconsts.KubeLabelIsRestoreTarget, got)
 		}
 		if got := podTemplateSpec.Labels[commonconsts.KubeLabelCheckpointHash]; got != "hash-ready-1" {
 			t.Fatalf("expected %s to be checkpoint hash, got %q", commonconsts.KubeLabelCheckpointHash, got)
@@ -1344,8 +1344,8 @@ func TestDynamoComponentDeploymentReconciler_generatePodTemplateSpec_RestoreLabe
 			t.Fatalf("generatePodTemplateSpec failed: %v", err)
 		}
 
-		if _, ok := podTemplateSpec.Labels[commonconsts.KubeLabelCheckpointRestore]; ok {
-			t.Fatalf("did not expect %s label when checkpoint is not ready", commonconsts.KubeLabelCheckpointRestore)
+		if _, ok := podTemplateSpec.Labels[commonconsts.KubeLabelIsRestoreTarget]; ok {
+			t.Fatalf("did not expect %s label when checkpoint is not ready", commonconsts.KubeLabelIsRestoreTarget)
 		}
 		if _, ok := podTemplateSpec.Labels[commonconsts.KubeLabelCheckpointHash]; ok {
 			t.Fatalf("did not expect %s label when checkpoint is not ready", commonconsts.KubeLabelCheckpointHash)

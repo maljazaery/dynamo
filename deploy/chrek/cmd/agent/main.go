@@ -89,7 +89,7 @@ func main() {
 			fatal(agentLog, err, "Failed to create pod watcher")
 		}
 		go func() {
-			agentLog.Info("Pod watcher started", "label", checkpoint.KubeLabelCheckpointSource)
+			agentLog.Info("Pod watcher started", "label", checkpoint.KubeLabelIsCheckpointSource)
 			if err := podWatcher.Start(ctx); err != nil {
 				agentLog.Error(err, "Pod watcher exited")
 			}

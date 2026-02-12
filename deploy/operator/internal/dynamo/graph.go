@@ -1412,7 +1412,7 @@ func generateLabels(
 
 	// Only mark pods as restore targets when a concrete checkpoint is ready.
 	if checkpointInfo != nil && checkpointInfo.Enabled && checkpointInfo.Ready {
-		labels[commonconsts.KubeLabelCheckpointRestore] = "true"
+		labels[commonconsts.KubeLabelIsRestoreTarget] = "true"
 		labels[commonconsts.KubeLabelCheckpointHash] = checkpointInfo.Hash
 	}
 	setMetricsLabels(labels, dynamoDeployment)

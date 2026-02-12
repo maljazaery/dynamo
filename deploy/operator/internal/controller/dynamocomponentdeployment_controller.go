@@ -1129,7 +1129,7 @@ func (r *DynamoComponentDeploymentReconciler) generateDeployment(ctx context.Con
 	// the old pod is terminated before the restore placeholder is started.
 	if podTemplateSpec != nil &&
 		podTemplateSpec.Labels != nil &&
-		podTemplateSpec.Labels[commonconsts.KubeLabelCheckpointRestore] == commonconsts.KubeLabelValueTrue {
+		podTemplateSpec.Labels[commonconsts.KubeLabelIsRestoreTarget] == commonconsts.KubeLabelValueTrue {
 		strategy = appsv1.DeploymentStrategy{
 			Type: appsv1.RecreateDeploymentStrategyType,
 		}
@@ -1184,7 +1184,7 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 	// Restore labels are operator-controlled. Clear any stale values from prior
 	// reconciliation versions or user-provided metadata before applying the
 	// explicit ready-checkpoint contract below.
-	delete(podLabels, commonconsts.KubeLabelCheckpointRestore)
+	delete(podLabels, commonconsts.KubeLabelIsRestoreTarget)
 	if opt.isStealingTrafficDebugModeEnabled {
 		podLabels[commonconsts.KubeLabelDynamoDeploymentTargetType] = DeploymentTargetTypeDebug
 	}
@@ -1294,7 +1294,7 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 	// Explicit restore orchestration contract:
 	// only mark pods as restore targets when checkpoint material is ready.
 	if checkpointInfo != nil && checkpointInfo.Enabled && checkpointInfo.Ready {
-		podLabels[commonconsts.KubeLabelCheckpointRestore] = commonconsts.KubeLabelValueTrue
+		podLabels[commonconsts.KubeLabelIsRestoreTarget] = commonconsts.KubeLabelValueTrue
 		if checkpointInfo.Hash != "" {
 			podLabels[commonconsts.KubeLabelCheckpointHash] = checkpointInfo.Hash
 		}

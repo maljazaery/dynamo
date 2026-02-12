@@ -8,28 +8,28 @@ const (
 	// DevShmDirName is the directory name for captured /dev/shm contents.
 	DevShmDirName = "dev-shm"
 
-	// KubeLabelCheckpointSource is the pod label that triggers automatic checkpointing.
+	// KubeLabelIsCheckpointSource is the pod label that triggers automatic checkpointing.
 	// Set by the operator on checkpoint-eligible pods.
-	KubeLabelCheckpointSource = "nvidia.com/checkpoint-source"
+	KubeLabelIsCheckpointSource = "nvidia.com/chrek-is-checkpoint-source"
 
 	// KubeLabelCheckpointHash is the pod label specifying the checkpoint identity hash.
 	// Set by the operator on checkpoint-eligible pods. Also used as the DynamoCheckpoint
 	// CR name, so it doubles as the CR lookup key.
-	KubeLabelCheckpointHash = "nvidia.com/checkpoint-hash"
+	KubeLabelCheckpointHash = "nvidia.com/chrek-checkpoint-hash"
 
-	// KubeLabelCheckpointRestore is the pod label that triggers automatic restore.
+	// KubeLabelIsRestoreTarget is the pod label that triggers automatic restore.
 	// Set by the operator on restore-eligible (placeholder) pods.
-	KubeLabelCheckpointRestore = "nvidia.com/checkpoint-restore"
+	KubeLabelIsRestoreTarget = "nvidia.com/chrek-is-restore-target"
 
 	// KubeAnnotationCheckpointStatus is set on checkpoint-source pods by the watcher
 	// to track checkpoint progress. Values: "in_progress", "completed", "failed".
 	// Persists across agent restarts for idempotent checkpoint operations.
-	KubeAnnotationCheckpointStatus = "nvidia.com/checkpoint-status"
+	KubeAnnotationCheckpointStatus = "nvidia.com/chrek-checkpoint-status"
 
 	// KubeAnnotationRestoreStatus is set on restore-target (placeholder) pods by the
 	// watcher to track restore progress. Values: "in_progress", "completed", "failed".
 	// Persists across agent restarts for idempotent restore operations.
-	KubeAnnotationRestoreStatus = "nvidia.com/restore-status"
+	KubeAnnotationRestoreStatus = "nvidia.com/chrek-restore-status"
 
 	// DumpLogFilename is the CRIU dump (checkpoint) log filename.
 	DumpLogFilename = "dump.log"

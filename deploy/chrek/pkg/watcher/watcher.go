@@ -56,6 +56,8 @@ type Watcher struct {
 	stopCh chan struct{}
 }
 
+const restoreReadyTimeout = 2 * time.Minute
+
 // NewWatcher creates a new pod watcher.
 func NewWatcher(cfg WatcherConfig, discoveryClient *checkpoint.DiscoveryClient) (*Watcher, error) {
 	// Create in-cluster Kubernetes client
@@ -356,6 +358,13 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		return
 	}
 
+	if err := w.waitForPodReady(ctx, pod.Namespace, pod.Name, containerName, restoreReadyTimeout); err != nil {
+		log.Error(err, "Restore post-signal readiness check failed")
+		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
+		w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "failed"})
+		return
+	}
+
 	w.emitPodEvent(ctx, pod, corev1.EventTypeNormal, "RestoreSucceeded", fmt.Sprintf("Restore completed from checkpoint %s", checkpointHash))
 	w.annotatePod(ctx, pod, map[string]string{checkpoint.KubeAnnotationRestoreStatus: "completed"})
 }
@@ -595,6 +604,50 @@ func readInnermostNamespacePID(hostPID int) (int, error) {
 	}
 
 	return 0, fmt.Errorf("NSpid not found in %s", statusPath)
+}
+
+func (w *Watcher) waitForPodReady(ctx context.Context, namespace, podName, containerName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	lastPhase := ""
+
+	for time.Now().Before(deadline) {
+		pod, err := w.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get restore pod %s/%s: %w", namespace, podName, err)
+		}
+
+		lastPhase = string(pod.Status.Phase)
+		ready := false
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
+				ready = true
+				break
+			}
+		}
+		if ready {
+			return nil
+		}
+
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name != containerName {
+				continue
+			}
+			if cs.State.Terminated != nil {
+				return fmt.Errorf(
+					"restore pod %s/%s container %s terminated: reason=%s exitCode=%d",
+					namespace,
+					podName,
+					containerName,
+					cs.State.Terminated.Reason,
+					cs.State.Terminated.ExitCode,
+				)
+			}
+		}
+
+		time.Sleep(1 * time.Second)
+	}
+
+	return fmt.Errorf("restore pod %s/%s did not become Ready within %s (last phase: %s)", namespace, podName, timeout, lastPhase)
 }
 
 // tryAcquire claims the in-flight slot for podKey. Returns false if already held.

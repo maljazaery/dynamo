@@ -1,4 +1,6 @@
-// Package watcher provides Kubernetes pod watching for automatic checkpointing.
+// Package watcher provides Kubernetes pod watching for automatic checkpoint/restore.
+// The watcher is the sole entry point for chrek operations — it detects pods with
+// checkpoint/restore labels and calls the orchestrators directly.
 package watcher
 
 import (
@@ -26,14 +28,12 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/api"
 )
 
 // Config holds watcher configuration.
 type Config struct {
 	NodeName            string
 	RestrictedNamespace string
-	AgentSocketPath     string
 	CheckpointSpec      *config.CheckpointSpec
 }
 
@@ -41,7 +41,8 @@ type Config struct {
 type Watcher struct {
 	config          Config
 	clientset       kubernetes.Interface
-	agentClient     *api.Client
+	checkpointer    *orchestrate.Checkpointer
+	restorer        *orchestrate.Restorer
 	discoveryClient *containerd.DiscoveryClient
 	log             logr.Logger
 
@@ -52,7 +53,13 @@ type Watcher struct {
 }
 
 // NewWatcher creates a new pod watcher.
-func NewWatcher(cfg Config, discoveryClient *containerd.DiscoveryClient, log logr.Logger) (*Watcher, error) {
+func NewWatcher(
+	cfg Config,
+	checkpointer *orchestrate.Checkpointer,
+	restorer *orchestrate.Restorer,
+	discoveryClient *containerd.DiscoveryClient,
+	log logr.Logger,
+) (*Watcher, error) {
 	restConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
@@ -63,14 +70,11 @@ func NewWatcher(cfg Config, discoveryClient *containerd.DiscoveryClient, log log
 		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
 	}
 
-	if cfg.AgentSocketPath == "" {
-		return nil, fmt.Errorf("agent socket path is required")
-	}
-
 	return &Watcher{
 		config:          cfg,
 		clientset:       clientset,
-		agentClient:     api.NewClient(cfg.AgentSocketPath),
+		checkpointer:    checkpointer,
+		restorer:        restorer,
 		discoveryClient: discoveryClient,
 		log:             log,
 		inFlight:        make(map[string]struct{}),
@@ -88,8 +92,6 @@ func (w *Watcher) Start(ctx context.Context) error {
 		"node", w.config.NodeName,
 		"checkpoint", config.KubeLabelIsCheckpointSource,
 		"restore", config.KubeLabelIsRestoreTarget,
-		"restore_enabled", w.agentClient != nil,
-		"socket_path", w.config.AgentSocketPath,
 	)
 
 	var nsOptions []informers.SharedInformerOption
@@ -130,33 +132,31 @@ func (w *Watcher) Start(ctx context.Context) error {
 	syncFuncs = append(syncFuncs, ckptInformer.HasSynced)
 
 	// Restore informer
-	if w.agentClient != nil {
-		restoreSelector := labels.SelectorFromSet(labels.Set{
-			config.KubeLabelIsRestoreTarget: "true",
-		}).String()
+	restoreSelector := labels.SelectorFromSet(labels.Set{
+		config.KubeLabelIsRestoreTarget: "true",
+	}).String()
 
-		restoreFactoryOpts := append([]informers.SharedInformerOption{
-			informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
-				opts.LabelSelector = restoreSelector
-			}),
-		}, nsOptions...)
+	restoreFactoryOpts := append([]informers.SharedInformerOption{
+		informers.WithTweakListOptions(func(opts *metav1.ListOptions) {
+			opts.LabelSelector = restoreSelector
+		}),
+	}, nsOptions...)
 
-		restoreFactory := informers.NewSharedInformerFactoryWithOptions(
-			w.clientset, 30*time.Second, restoreFactoryOpts...,
-		)
+	restoreFactory := informers.NewSharedInformerFactoryWithOptions(
+		w.clientset, 30*time.Second, restoreFactoryOpts...,
+	)
 
-		restoreInformer := restoreFactory.Core().V1().Pods().Informer()
-		restoreInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				w.handleRestorePodEvent(ctx, obj.(*corev1.Pod))
-			},
-			UpdateFunc: func(_, newObj interface{}) {
-				w.handleRestorePodEvent(ctx, newObj.(*corev1.Pod))
-			},
-		})
-		go restoreFactory.Start(w.stopCh)
-		syncFuncs = append(syncFuncs, restoreInformer.HasSynced)
-	}
+	restoreInformer := restoreFactory.Core().V1().Pods().Informer()
+	restoreInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			w.handleRestorePodEvent(ctx, obj.(*corev1.Pod))
+		},
+		UpdateFunc: func(_, newObj interface{}) {
+			w.handleRestorePodEvent(ctx, newObj.(*corev1.Pod))
+		},
+	})
+	go restoreFactory.Start(w.stopCh)
+	syncFuncs = append(syncFuncs, restoreInformer.HasSynced)
 
 	if !cache.WaitForCacheSync(w.stopCh, syncFuncs...) {
 		return fmt.Errorf("failed to sync informer caches")
@@ -275,14 +275,6 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		return
 	}
 
-	if w.agentClient == nil {
-		err := fmt.Errorf("agent UDS client is not configured")
-		log.Error(err, "External restore failed")
-		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
-		return
-	}
-
 	containerName := resolveMainContainerName(pod)
 	if containerName == "" {
 		err := fmt.Errorf("no containers found in pod spec")
@@ -292,14 +284,14 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		return
 	}
 
-	req := orchestrate.RestoreAPIRequest{
+	req := orchestrate.RestoreRequest{
 		CheckpointHash: checkpointHash,
 		PodName:        pod.Name,
 		PodNamespace:   pod.Namespace,
 		ContainerName:  containerName,
 	}
 
-	result, err := w.agentClient.Restore(ctx, req)
+	result, err := w.restorer.Restore(ctx, req)
 	if err != nil {
 		log.Error(err, "External restore failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
@@ -351,14 +343,6 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		return
 	}
 
-	if w.agentClient == nil {
-		err := fmt.Errorf("agent UDS client is not configured")
-		log.Error(err, "Checkpoint failed")
-		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", err.Error())
-		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
-		return
-	}
-
 	containerName := resolveMainContainerName(pod)
 
 	var containerID string
@@ -389,22 +373,17 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		return
 	}
 
-	if w.config.CheckpointSpec == nil {
-		log.Info("CheckpointSpec is nil - cannot perform checkpoint")
-		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", "CheckpointSpec is nil")
-		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
-		return
-	}
-
-	req := api.CheckpointAPIRequest{
+	req := orchestrate.CheckpointRequest{
 		ContainerID:    containerID,
 		ContainerName:  containerName,
 		CheckpointHash: checkpointHash,
+		CheckpointDir:  w.config.CheckpointSpec.BasePath,
+		NodeName:       w.config.NodeName,
 		PodName:        pod.Name,
 		PodNamespace:   pod.Namespace,
 	}
 
-	result, err := w.agentClient.Checkpoint(ctx, req)
+	result, err := w.checkpointer.Checkpoint(ctx, req, w.config.CheckpointSpec)
 	if err != nil {
 		log.Error(err, "Checkpoint failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", err.Error())

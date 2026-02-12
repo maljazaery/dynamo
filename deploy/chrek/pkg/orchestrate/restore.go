@@ -62,25 +62,23 @@ func NewRestorer(cfg RestorerConfig, discoveryClient *containerd.DiscoveryClient
 	}
 }
 
-// RestoreAPIRequest is the JSON body for POST /restore.
-type RestoreAPIRequest struct {
-	CheckpointHash string `json:"checkpoint_hash"`
-	PodName        string `json:"pod_name"`
-	PodNamespace   string `json:"pod_namespace"`
-	ContainerName  string `json:"container_name"`
+// RestoreRequest holds the parameters for a restore operation.
+type RestoreRequest struct {
+	CheckpointHash string
+	PodName        string
+	PodNamespace   string
+	ContainerName  string
 }
 
-// RestoreAPIResponse is the JSON response for POST /restore.
-type RestoreAPIResponse struct {
-	Success         bool     `json:"success"`
-	RestoredPID     int      `json:"restored_pid,omitempty"`
-	RestoredHostPID int      `json:"restored_host_pid,omitempty"`
-	CompletedSteps  []string `json:"completed_steps,omitempty"`
-	Error           string   `json:"error,omitempty"`
+// RestoreResult contains the result of a restore operation.
+type RestoreResult struct {
+	RestoredPID     int
+	RestoredHostPID int
+	CompletedSteps  []string
 }
 
 // Restore performs external restore for the given request.
-func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*RestoreAPIResponse, error) {
+func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult, error) {
 	restoreStart := time.Now()
 	r.log.Info("=== Starting external restore ===",
 		"checkpoint_hash", req.CheckpointHash,
@@ -191,8 +189,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreAPIRequest) (*Restore
 		"steps", completedSteps,
 	)
 
-	return &RestoreAPIResponse{
-		Success:         true,
+	return &RestoreResult{
 		RestoredPID:     restoredPID,
 		RestoredHostPID: restoredHostPID,
 		CompletedSteps:  completedSteps,

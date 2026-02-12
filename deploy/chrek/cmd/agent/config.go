@@ -8,7 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/api"
 )
 
 // ConfigMapPath is the default path where the ConfigMap is mounted.
@@ -22,13 +21,6 @@ type FullConfig struct {
 
 // AgentConfig holds the runtime configuration for the checkpoint agent daemon.
 type AgentConfig struct {
-	// SocketPath is the UDS socket path for the API server.
-	// Default: /var/run/chrek/chrek.sock
-	SocketPath string `yaml:"socketPath"`
-
-	// EnableWatcher enables automatic pod watching alongside the UDS server.
-	EnableWatcher bool `yaml:"enableWatcher"`
-
 	// NodeName is the Kubernetes node name (from NODE_NAME env, downward API)
 	NodeName string `yaml:"-"`
 
@@ -49,8 +41,6 @@ func LoadConfig(path string) (*FullConfig, error) {
 	}
 
 	cfg.Agent.loadEnvOverrides()
-	cfg.applyDefaults()
-
 	return cfg, nil
 }
 
@@ -61,7 +51,6 @@ func LoadConfigOrDefault(path string) (*FullConfig, error) {
 		if os.IsNotExist(err) {
 			cfg = &FullConfig{}
 			cfg.Agent.loadEnvOverrides()
-			cfg.applyDefaults()
 			return cfg, nil
 		}
 		return nil, err
@@ -79,16 +68,7 @@ func (c *AgentConfig) loadEnvOverrides() {
 	}
 }
 
-func (c *FullConfig) applyDefaults() {
-	if c.Agent.SocketPath == "" {
-		c.Agent.SocketPath = api.DefaultSocketPath
-	}
-}
-
 // Validate checks that the configuration has valid values.
 func (c *FullConfig) Validate() error {
-	if c.Agent.SocketPath == "" {
-		return fmt.Errorf("agent.socketPath cannot be empty")
-	}
 	return c.Checkpoint.Validate()
 }

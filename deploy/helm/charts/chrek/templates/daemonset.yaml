@@ -114,9 +114,6 @@ spec:
             - name: host-cgroup
               mountPath: /sys/fs/cgroup
               readOnly: true
-            # UDS socket directory (shared with sidecars via hostPath)
-            - name: chrek-socket
-              mountPath: /var/run/chrek
             # Kubelet PodResources API socket (for GPU UUID discovery)
             - name: kubelet-pod-resources
               mountPath: /var/lib/kubelet/pod-resources
@@ -180,11 +177,6 @@ spec:
           hostPath:
             path: /sys/fs/cgroup
             type: Directory
-        # UDS socket directory (shared between DaemonSet and sidecars)
-        - name: chrek-socket
-          hostPath:
-            path: /var/run/chrek
-            type: DirectoryOrCreate
         # Kubelet PodResources API socket directory
         - name: kubelet-pod-resources
           hostPath:

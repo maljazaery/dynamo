@@ -1,17 +1,15 @@
 // Package main provides the chrek DaemonSet agent.
-// The agent runs a UDS HTTP server for checkpoint/restore operations and
-// optionally watches pods for automatic checkpointing.
+// The agent watches for pods with checkpoint/restore labels on its node
+// and triggers operations via the orchestrators.
 package main
 
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/zapr"
@@ -21,7 +19,6 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/api"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/watcher"
 )
 
@@ -54,13 +51,6 @@ func main() {
 		rootLog.WithName("restorer"),
 	)
 
-	serverCfg := api.Config{
-		SocketPath:     cfg.Agent.SocketPath,
-		NodeName:       cfg.Agent.NodeName,
-		CheckpointSpec: &cfg.Checkpoint,
-	}
-	srv := api.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -70,43 +60,35 @@ func main() {
 	agentLog.Info("Starting chrek agent",
 		"node", cfg.Agent.NodeName,
 		"checkpoint_dir", cfg.Checkpoint.BasePath,
-		"socket_path", cfg.Agent.SocketPath,
-		"watcher_enabled", cfg.Agent.EnableWatcher,
 		"watch_namespace", cfg.Agent.RestrictedNamespace,
 	)
 
-	if cfg.Agent.EnableWatcher {
-		watcherCfg := watcher.Config{
-			NodeName:            cfg.Agent.NodeName,
-			RestrictedNamespace: cfg.Agent.RestrictedNamespace,
-			AgentSocketPath:     cfg.Agent.SocketPath,
-			CheckpointSpec:      &cfg.Checkpoint,
-		}
-		podWatcher, err := watcher.NewWatcher(watcherCfg, discoveryClient, rootLog.WithName("watcher"))
-		if err != nil {
-			fatal(agentLog, err, "Failed to create pod watcher")
-		}
-		go func() {
-			agentLog.Info("Pod watcher started", "label", config.KubeLabelIsCheckpointSource)
-			if err := podWatcher.Start(ctx); err != nil {
-				agentLog.Error(err, "Pod watcher exited")
-			}
-		}()
+	watcherCfg := watcher.Config{
+		NodeName:            cfg.Agent.NodeName,
+		RestrictedNamespace: cfg.Agent.RestrictedNamespace,
+		CheckpointSpec:      &cfg.Checkpoint,
+	}
+	podWatcher, err := watcher.NewWatcher(watcherCfg, checkpointer, restorer, discoveryClient, rootLog.WithName("watcher"))
+	if err != nil {
+		fatal(agentLog, err, "Failed to create pod watcher")
 	}
 
+	// Run watcher in the background
+	watcherDone := make(chan error, 1)
 	go func() {
-		<-sigChan
-		agentLog.Info("Shutting down")
-		cancel()
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			agentLog.Error(err, "Server shutdown error")
-		}
+		agentLog.Info("Pod watcher started", "label", config.KubeLabelIsCheckpointSource)
+		watcherDone <- podWatcher.Start(ctx)
 	}()
 
-	if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-		fatal(agentLog, err, "Server error")
+	// Wait for signal or watcher exit
+	select {
+	case <-sigChan:
+		agentLog.Info("Shutting down")
+		cancel()
+	case err := <-watcherDone:
+		if err != nil {
+			fatal(agentLog, err, "Pod watcher exited with error")
+		}
 	}
 
 	agentLog.Info("Agent stopped")

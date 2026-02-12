@@ -14,12 +14,6 @@ data:
     # This ConfigMap provides static configuration for the checkpoint agent.
     # Dynamic values (NODE_NAME, RESTRICTED_NAMESPACE, etc.) come from environment variables.
 
-    agent:
-      # UDS socket path for the API server
-      socketPath: {{ .Values.config.agent.socketPath | quote }}
-      # Enable automatic pod watching alongside the UDS server
-      enableWatcher: {{ .Values.config.agent.enableWatcher }}
-
     checkpoint:
       # Base path for checkpoint directories (shared PVC mount path)
       basePath: {{ .Values.storage.pvc.basePath | quote }}

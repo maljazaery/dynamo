@@ -117,14 +117,8 @@ rbac:
   namespaceRestricted: true
 
 # Static configuration (loaded from ConfigMap)
-# Dynamic values (NODE_NAME, RESTRICTED_NAMESPACE, etc.) still come from environment variables
+# Dynamic values (NODE_NAME, RESTRICTED_NAMESPACE, etc.) come from environment variables
 config:
-  agent:
-    # UDS socket path for the API server
-    socketPath: "/var/run/chrek/chrek.sock"
-    # Enable automatic pod watching alongside the UDS server
-    enableWatcher: false
-
   checkpoint:
     criu:
       # Ghost file size limit in bytes

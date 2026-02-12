@@ -1,6 +1,6 @@
 // Package cuda provides CUDA checkpoint and restore operations using
 // the external cuda-checkpoint binary. Both DaemonSet-side (cgroup-based)
-// and criu-helper-side (process-tree-based) operations are included.
+// and ns-restore-runner-side (process-tree-based) operations are included.
 package cuda
 
 import (
@@ -181,7 +181,7 @@ func RestoreExternal(ctx context.Context, m *manifest.CheckpointManifest, podNam
 }
 
 // RestoreInNamespace performs CUDA restore from inside the container namespace
-// (called by criu-helper). Uses process tree walking instead of cgroup discovery.
+// (called by ns-restore-runner). Uses process tree walking instead of cgroup discovery.
 func RestoreInNamespace(ctx context.Context, m *manifest.CheckpointManifest, restoredPID int, deviceMap string, log logr.Logger) error {
 	if m.ExternalRestore == nil || m.ExternalRestore.CUDA == nil || len(m.ExternalRestore.CUDA.PIDs) == 0 {
 		log.Info("Checkpoint does not contain CUDA metadata, skipping cuda-checkpoint restore")
@@ -277,7 +277,7 @@ func IsCUDAProcess(ctx context.Context, pid int) (bool, error) {
 }
 
 // RunAction runs a cuda-checkpoint action (restore/unlock) with logging.
-// Used by criu-helper which needs per-action log output.
+// Used by ns-restore-runner which needs per-action log output.
 func RunAction(ctx context.Context, pid int, action string, deviceMap string, log logr.Logger) error {
 	args := []string{"--action", action, "--pid", strconv.Itoa(pid)}
 	if action == string(actionRestore) && deviceMap != "" {
@@ -301,7 +301,7 @@ func RunAction(ctx context.Context, pid int, action string, deviceMap string, lo
 }
 
 // ProcessTreePIDs walks the process tree rooted at rootPID and returns all PIDs.
-// Used by criu-helper for in-namespace CUDA PID discovery.
+// Used by ns-restore-runner for in-namespace CUDA PID discovery.
 func ProcessTreePIDs(rootPID int) []int {
 	if rootPID <= 0 {
 		return nil

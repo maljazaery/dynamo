@@ -334,7 +334,7 @@ func InjectPodInfoVolumeMount(container *corev1.Container) {
 // external restore via the chrek DaemonSet. The pod image is expected to be a
 // runtime-compatible restore image (runtime + CRIU tooling). For ready checkpoints,
 // the operator overrides command to `sleep infinity` so the watcher can trigger
-// external restore via nsenter + criu-helper.
+// external restore via nsenter + ns-restore-runner.
 //
 // Modifications applied:
 //  1. Security context - seccomp profile (io_uring blocking, matches checkpoint environment)
@@ -382,7 +382,7 @@ func InjectCheckpointIntoPodSpec(
 
 	// When a ready checkpoint exists, override the container command to sleep infinity.
 	// The DaemonSet watcher detects this pod via the checkpoint-restore label and
-	// performs external restore (nsenter + criu-helper). When no checkpoint is ready,
+	// performs external restore (nsenter + ns-restore-runner). When no checkpoint is ready,
 	// the original command runs (cold start).
 	if info.Ready {
 		mainContainer.Command = []string{"sleep", "infinity"}

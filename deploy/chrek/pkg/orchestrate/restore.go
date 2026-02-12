@@ -27,20 +27,20 @@ import (
 )
 
 const (
-	// CRIUHelperBinary is the path to the criu-helper binary in the placeholder image.
-	CRIUHelperBinary = "/usr/local/bin/criu-helper"
+	// NSRestoreRunnerBinary is the path to the ns-restore-runner binary in the placeholder image.
+	NSRestoreRunnerBinary = "/usr/local/bin/ns-restore-runner"
 
 	// RestoreLogFilename is the CRIU restore log filename.
 	RestoreLogFilename = "restore.log"
 
-	maxCRIUHelperOutputLines = 400
+	maxNSRestoreRunnerOutputLines = 400
 )
 
 // RestorerConfig holds configuration for the external restore orchestrator.
 type RestorerConfig struct {
-	CheckpointBasePath string
-	CRIUHelperPath     string
-	CRIUSettings       *config.CRIUSettings
+	CheckpointBasePath  string
+	NSRestoreRunnerPath string
+	CRIUSettings        *config.CRIUSettings
 }
 
 // Restorer orchestrates external restore operations from the DaemonSet.
@@ -52,8 +52,8 @@ type Restorer struct {
 
 // NewRestorer creates a new external restore orchestrator.
 func NewRestorer(cfg RestorerConfig, discoveryClient *containerd.DiscoveryClient, log logr.Logger) *Restorer {
-	if cfg.CRIUHelperPath == "" {
-		cfg.CRIUHelperPath = CRIUHelperBinary
+	if cfg.NSRestoreRunnerPath == "" {
+		cfg.NSRestoreRunnerPath = NSRestoreRunnerBinary
 	}
 	return &Restorer{
 		cfg:             cfg,
@@ -157,7 +157,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		r.log.Error(err, "Failed to create link_remap stubs")
 	}
 
-	// Step 4: Execute nsenter + criu-helper
+	// Step 4: Execute nsenter + ns-restore-runner
 	restoredPID, restoredHostPID, err := r.executeCRIURestore(ctx, placeholderPID, checkpointPath, m, cudaDeviceMap)
 	if err != nil {
 		return nil, fmt.Errorf("CRIU restore failed: %w", err)
@@ -202,7 +202,7 @@ func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, c
 	baseArgs := []string{
 		"-t", pidStr,
 		"-m", "-n", "-p", "-i", "-u",
-		"--", r.cfg.CRIUHelperPath,
+		"--", r.cfg.NSRestoreRunnerPath,
 		"--checkpoint-path", checkpointPath,
 	}
 
@@ -232,31 +232,31 @@ func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, c
 	}
 
 	args := append(append([]string{}, baseArgs...), restoreFlags...)
-	restoredPID, restoredHostPID, output, err := r.runCRIUHelper(ctx, args)
-	if err != nil && len(restoreFlags) > 0 && isUnsupportedCRIUHelperFlag(output, restoreFlags) {
-		r.log.Info("Retrying restore without unsupported optional criu-helper flags", "flags", strings.Join(restoreFlags, " "))
-		restoredPID, restoredHostPID, output, err = r.runCRIUHelper(ctx, baseArgs)
+	restoredPID, restoredHostPID, output, err := r.runNSRestoreRunner(ctx, args)
+	if err != nil && len(restoreFlags) > 0 && isUnsupportedNSRestoreRunnerFlag(output, restoreFlags) {
+		r.log.Info("Retrying restore without unsupported optional ns-restore-runner flags", "flags", strings.Join(restoreFlags, " "))
+		restoredPID, restoredHostPID, output, err = r.runNSRestoreRunner(ctx, baseArgs)
 	}
 	if err != nil {
-		return 0, 0, fmt.Errorf("nsenter + criu-helper failed: %w\noutput: %s", err, output)
+		return 0, 0, fmt.Errorf("nsenter + ns-restore-runner failed: %w\noutput: %s", err, output)
 	}
 	return restoredPID, restoredHostPID, nil
 }
 
-func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, string, error) {
+func (r *Restorer) runNSRestoreRunner(ctx context.Context, args []string) (int, int, string, error) {
 	cmd := exec.CommandContext(ctx, "nsenter", args...)
-	r.log.V(1).Info("Executing nsenter + criu-helper", "cmd", cmd.String())
+	r.log.V(1).Info("Executing nsenter + ns-restore-runner", "cmd", cmd.String())
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return 0, 0, "", fmt.Errorf("failed to open criu-helper stdout pipe: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to open ns-restore-runner stdout pipe: %w", err)
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
-		return 0, 0, "", fmt.Errorf("failed to open criu-helper stderr pipe: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to open ns-restore-runner stderr pipe: %w", err)
 	}
 	if err := cmd.Start(); err != nil {
-		return 0, 0, "", fmt.Errorf("failed to start nsenter + criu-helper: %w", err)
+		return 0, 0, "", fmt.Errorf("failed to start nsenter + ns-restore-runner: %w", err)
 	}
 
 	var (
@@ -269,7 +269,7 @@ func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, 
 	appendCapturedLine := func(line string) {
 		mu.Lock()
 		defer mu.Unlock()
-		if len(capturedLines) >= maxCRIUHelperOutputLines {
+		if len(capturedLines) >= maxNSRestoreRunnerOutputLines {
 			capturedLines = append(capturedLines[1:], line)
 			return
 		}
@@ -279,7 +279,7 @@ func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, 
 	setMarker := func(key, rawValue string) error {
 		value, parseErr := strconv.Atoi(rawValue)
 		if parseErr != nil {
-			return fmt.Errorf("failed to parse %s from criu-helper output: %w", key, parseErr)
+			return fmt.Errorf("failed to parse %s from ns-restore-runner output: %w", key, parseErr)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -315,10 +315,10 @@ func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, 
 				continue
 			}
 
-			r.logCRIUHelperLine(line, stream)
+			r.logNSRestoreRunnerLine(line, stream)
 		}
 		if scanErr := scanner.Err(); scanErr != nil {
-			return fmt.Errorf("failed to read criu-helper %s: %w", stream, scanErr)
+			return fmt.Errorf("failed to read ns-restore-runner %s: %w", stream, scanErr)
 		}
 		return nil
 	}
@@ -363,10 +363,10 @@ func (r *Restorer) runCRIUHelper(ctx context.Context, args []string) (int, int, 
 		return parsedRestoredPID, parsedRestoredHostPID, output, nil
 	}
 
-	return 0, 0, output, fmt.Errorf("criu-helper did not output RESTORED_PID")
+	return 0, 0, output, fmt.Errorf("ns-restore-runner did not output RESTORED_PID")
 }
 
-func isUnsupportedCRIUHelperFlag(output string, flags []string) bool {
+func isUnsupportedNSRestoreRunnerFlag(output string, flags []string) bool {
 	if !strings.Contains(output, "flag provided but not defined") {
 		return false
 	}
@@ -379,14 +379,14 @@ func isUnsupportedCRIUHelperFlag(output string, flags []string) bool {
 	return false
 }
 
-func (r *Restorer) logCRIUHelperLine(line, stream string) {
+func (r *Restorer) logNSRestoreRunnerLine(line, stream string) {
 	level, message, fields, ok := parseHelperLogLine(line)
 	if !ok {
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
-		kv := map[string]interface{}{"source": "criu-helper", "stream": stream}
+		kv := map[string]interface{}{"source": "ns-restore-runner", "stream": stream}
 		encoded, err := json.Marshal(kv)
 		if err != nil {
-			encoded = []byte(`{"source":"criu-helper"}`)
+			encoded = []byte(`{"source":"ns-restore-runner"}`)
 		}
 		fmt.Fprintf(os.Stdout, "%s\tINFO\trestorer\torchestrate/restore.go:0\t%s\t%s\n", ts, line, string(encoded))
 		return
@@ -405,13 +405,13 @@ func (r *Restorer) logCRIUHelperLine(line, stream string) {
 	if helperTime == "" {
 		helperTime = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	fields["source"] = "criu-helper"
+	fields["source"] = "ns-restore-runner"
 	if stream == "stderr" {
 		fields["stream"] = stream
 	}
 	encoded, err := json.Marshal(fields)
 	if err != nil {
-		encoded = []byte(`{"source":"criu-helper"}`)
+		encoded = []byte(`{"source":"ns-restore-runner"}`)
 	}
 	fmt.Fprintf(
 		os.Stdout,

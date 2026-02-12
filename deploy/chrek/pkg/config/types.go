@@ -75,7 +75,7 @@ type CRIUSettings struct {
 
 	// === Restore-specific RPC Options ===
 	// These only apply during CRIU restore (not dump). They are passed from the
-	// ConfigMap to criu-helper via CLI flags at restore time.
+	// ConfigMap to ns-restore-runner via CLI flags at restore time.
 
 	// RstSibling restores the process as a sibling (required for swrk/go-criu restore).
 	RstSibling bool `yaml:"rstSibling"`

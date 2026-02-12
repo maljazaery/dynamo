@@ -1,7 +1,7 @@
-// criu-helper is a self-contained binary that performs CRIU restore inside container
+// ns-restore-runner is a self-contained binary that performs CRIU restore inside container
 // namespaces. It is invoked by the DaemonSet via:
 //
-//	nsenter -t <PID> -m -n -p -i -- /usr/local/bin/criu-helper --checkpoint-path <path>
+//	nsenter -t <PID> -m -n -p -i -- /usr/local/bin/ns-restore-runner --checkpoint-path <path>
 //
 // It runs inside the placeholder container's mount/net/PID/IPC namespaces and:
 //  1. Remounts /proc/sys read-write (CRIU needs to write sysctl)
@@ -63,7 +63,7 @@ func main() {
 	forceIrmap := flag.Bool("force-irmap", false, "Force resolving inotify/fsnotify watch names")
 	flag.Parse()
 
-	log := rootLog.WithName("criu-helper")
+	log := rootLog.WithName("ns-restore-runner")
 
 	if *checkpointPath == "" {
 		fatal(log, nil, "--checkpoint-path is required")
@@ -90,7 +90,7 @@ type restoreOptions struct {
 
 func run(checkpointPath, workDir, cudaDeviceMap string, opts restoreOptions, log logr.Logger) error {
 	restoreStart := time.Now()
-	log.Info("Starting criu-helper restore workflow",
+	log.Info("Starting ns-restore-runner restore workflow",
 		"checkpoint_path", checkpointPath,
 		"work_dir", workDir,
 		"has_cuda_map", cudaDeviceMap != "",
@@ -202,7 +202,7 @@ func run(checkpointPath, workDir, cudaDeviceMap string, opts restoreOptions, log
 	} else {
 		log.Error(err, "Failed to resolve restored host PID from NSpid")
 	}
-	log.Info("criu-helper completed successfully", "restored_pid", notify.restoredPID)
+	log.Info("ns-restore-runner completed successfully", "restored_pid", notify.restoredPID)
 	return nil
 }
 

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,8 +31,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	criulib "github.com/checkpoint-restore/go-criu/v8"
-	"github.com/checkpoint-restore/go-criu/v8/crit"
-	"github.com/checkpoint-restore/go-criu/v8/crit/images/fdinfo"
 	criurpc "github.com/checkpoint-restore/go-criu/v8/rpc"
 	"google.golang.org/protobuf/proto"
 
@@ -288,7 +285,7 @@ func generateExtMountMaps(m *manifest.CheckpointManifest) ([]*criurpc.ExtMountMa
 // --- stdio fd inheritance ---
 
 func registerStdioInheritFDs(c *criulib.Criu, checkpointPath string, log logr.Logger) ([]*os.File, error) {
-	stdoutResources, stderrResources, err := discoverStdioInheritResources(checkpointPath)
+	stdoutResources, stderrResources, err := criu.DiscoverStdioInheritResources(checkpointPath)
 	if err != nil {
 		return nil, err
 	}
@@ -324,123 +321,6 @@ func registerStdioInheritFDs(c *criulib.Criu, checkpointPath string, log logr.Lo
 	}
 
 	return openFiles, nil
-}
-
-func discoverStdioInheritResources(checkpointPath string) ([]string, []string, error) {
-	resourcesByFileID, err := loadInheritResourcesByFileID(checkpointPath)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	fdinfoPaths, err := filepath.Glob(filepath.Join(checkpointPath, "fdinfo-*.img"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list fdinfo images: %w", err)
-	}
-	if len(fdinfoPaths) == 0 {
-		return nil, nil, fmt.Errorf("no fdinfo images found in %s", checkpointPath)
-	}
-	sort.Strings(fdinfoPaths)
-
-	stdoutSet := map[string]struct{}{}
-	stderrSet := map[string]struct{}{}
-
-	for _, fdinfoPath := range fdinfoPaths {
-		fdinfoFile, err := os.Open(fdinfoPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to open %s: %w", fdinfoPath, err)
-		}
-
-		img, decodeErr := crit.New(fdinfoFile, nil, "", false, false).Decode(&fdinfo.FdinfoEntry{})
-		closeErr := fdinfoFile.Close()
-		if decodeErr != nil {
-			return nil, nil, fmt.Errorf("failed to decode %s: %w", fdinfoPath, decodeErr)
-		}
-		if closeErr != nil {
-			return nil, nil, fmt.Errorf("failed to close %s: %w", fdinfoPath, closeErr)
-		}
-
-		for _, entry := range img.Entries {
-			fdEntry, ok := entry.Message.(*fdinfo.FdinfoEntry)
-			if !ok {
-				continue
-			}
-
-			resource := resourcesByFileID[fdEntry.GetId()]
-			if resource == "" {
-				continue
-			}
-
-			switch fdEntry.GetFd() {
-			case 1:
-				stdoutSet[resource] = struct{}{}
-			case 2:
-				stderrSet[resource] = struct{}{}
-			}
-		}
-	}
-
-	return sortedSetValues(stdoutSet), sortedSetValues(stderrSet), nil
-}
-
-func loadInheritResourcesByFileID(checkpointPath string) (map[uint32]string, error) {
-	filesPath := filepath.Join(checkpointPath, "files.img")
-	filesImage, err := os.Open(filesPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open %s: %w", filesPath, err)
-	}
-
-	img, decodeErr := crit.New(filesImage, nil, "", false, false).Decode(&fdinfo.FileEntry{})
-	closeErr := filesImage.Close()
-	if decodeErr != nil {
-		return nil, fmt.Errorf("failed to decode %s: %w", filesPath, decodeErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("failed to close %s: %w", filesPath, closeErr)
-	}
-
-	resources := make(map[uint32]string, len(img.Entries))
-	for _, entry := range img.Entries {
-		fileEntry, ok := entry.Message.(*fdinfo.FileEntry)
-		if !ok {
-			continue
-		}
-
-		resource := fileEntryInheritResource(fileEntry)
-		if resource == "" {
-			continue
-		}
-		resources[fileEntry.GetId()] = resource
-	}
-
-	return resources, nil
-}
-
-func fileEntryInheritResource(fileEntry *fdinfo.FileEntry) string {
-	if fileEntry == nil {
-		return ""
-	}
-	if pipeEntry := fileEntry.GetPipe(); pipeEntry != nil {
-		return fmt.Sprintf("pipe:[%d]", pipeEntry.GetPipeId())
-	}
-	if socketEntry := fileEntry.GetUsk(); socketEntry != nil {
-		return fmt.Sprintf("socket[%d]", socketEntry.GetIno())
-	}
-	if regEntry := fileEntry.GetReg(); regEntry != nil && regEntry.GetName() != "" {
-		return regEntry.GetName()
-	}
-	return ""
-}
-
-func sortedSetValues(values map[string]struct{}) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(values))
-	for value := range values {
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func closeFiles(files []*os.File) {

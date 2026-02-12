@@ -14,10 +14,9 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	gozap "go.uber.org/zap"
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	ctrl "sigs.k8s.io/controller-runtime"
-	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/externalrestore"
@@ -25,8 +24,8 @@ import (
 )
 
 func main() {
-	configureLogging()
-	agentLog := ctrl.Log.WithName("agent")
+	rootLog := configureLogging()
+	agentLog := rootLog.WithName("agent")
 
 	cfg, err := LoadConfigOrDefault(ConfigMapPath)
 	if err != nil {
@@ -42,7 +41,7 @@ func main() {
 	}
 	defer discoveryClient.Close()
 
-	checkpointer := checkpoint.NewCheckpointer(discoveryClient)
+	checkpointer := checkpoint.NewCheckpointer(discoveryClient, rootLog.WithName("checkpointer"))
 
 	// Create the external restorer
 	restorer := externalrestore.NewRestorer(
@@ -50,6 +49,7 @@ func main() {
 			CheckpointBasePath: cfg.Checkpoint.BasePath,
 		},
 		discoveryClient,
+		rootLog.WithName("restorer"),
 	)
 
 	// Create UDS server
@@ -59,7 +59,7 @@ func main() {
 		CheckpointSpec: &cfg.Checkpoint,
 		CRIUTimeout:    cfg.Checkpoint.CRIU.Timeout,
 	}
-	srv := externalrestore.NewServer(serverCfg, checkpointer, restorer)
+	srv := externalrestore.NewServer(serverCfg, checkpointer, restorer, rootLog.WithName("uds-server"))
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,7 +84,7 @@ func main() {
 			AgentSocketPath:     cfg.Agent.SocketPath,
 			CheckpointSpec:      &cfg.Checkpoint,
 		}
-		podWatcher, err := watcher.NewWatcher(watcherCfg, discoveryClient)
+		podWatcher, err := watcher.NewWatcher(watcherCfg, discoveryClient, rootLog.WithName("watcher"))
 		if err != nil {
 			fatal(agentLog, err, "Failed to create pod watcher")
 		}
@@ -116,40 +116,47 @@ func main() {
 	agentLog.Info("Agent stopped")
 }
 
-func configureLogging() {
+func configureLogging() logr.Logger {
 	level := strings.TrimSpace(strings.ToLower(os.Getenv("CHREK_LOG_LEVEL")))
 	if level == "" {
 		level = "info"
 	}
 
-	atomicLevel := gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+	zapLevel := zapcore.InfoLevel
 	parseErr := error(nil)
 	switch level {
 	case "trace", "debug":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.DebugLevel)
+		zapLevel = zapcore.DebugLevel
 	case "info":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+		zapLevel = zapcore.InfoLevel
 	case "warn", "warning":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.WarnLevel)
+		zapLevel = zapcore.WarnLevel
 	case "error":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.ErrorLevel)
+		zapLevel = zapcore.ErrorLevel
 	default:
 		parseErr = fmt.Errorf("invalid level %q", level)
 	}
-	if parseErr != nil {
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+
+	zapCfg := zap.Config{
+		Level:            zap.NewAtomicLevelAt(zapLevel),
+		Development:      true,
+		Encoding:         "console",
+		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
+		OutputPaths:      []string{"stdout"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+	zapLog, err := zapCfg.Build()
+	if err != nil {
+		// Fall back to a basic development logger if config fails
+		zapLog, _ = zap.NewDevelopment()
 	}
 
-	opts := ctrlzap.Options{
-		Development: true,
-		Level:       &atomicLevel,
-		TimeEncoder: zapcore.RFC3339NanoTimeEncoder,
-	}
-	ctrl.SetLogger(ctrlzap.New(ctrlzap.UseFlagOptions(&opts), ctrlzap.WriteTo(os.Stdout)))
-
+	log := zapr.NewLogger(zapLog)
 	if parseErr != nil {
-		ctrl.Log.WithName("setup").Info("Invalid CHREK_LOG_LEVEL, falling back to info", "value", level, "error", parseErr)
+		log.WithName("setup").Info("Invalid CHREK_LOG_LEVEL, falling back to info", "value", level, "error", parseErr)
 	}
+	return log
 }
 
 func fatal(log logr.Logger, err error, msg string, keysAndValues ...interface{}) {

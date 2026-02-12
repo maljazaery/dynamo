@@ -10,10 +10,7 @@ import (
 	"github.com/go-logr/logr"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/protobuf/proto"
-	ctrl "sigs.k8s.io/controller-runtime"
 )
-
-var criuLog = ctrl.Log.WithName("checkpointer").WithName("criu")
 
 // CRIUSettings holds CRIU-specific configuration options.
 // Options are categorized by how they are passed to CRIU:
@@ -145,13 +142,14 @@ func BuildCRIUDumpOptions(
 	mountInfo []MountInfo,
 	ociSpec *specs.Spec,
 	namespaces map[NamespaceType]*NamespaceInfo,
+	log logr.Logger,
 ) (*criurpc.CriuOpts, error) {
 	mountPolicy := BuildMountPolicy(mountInfo, ociSpec, rootFS)
 
 	extMnt := buildExternalMountMaps(mountPolicy.Externalized)
 	skipMnt := mountPolicy.Skipped
-	external := buildExternalNamespaces(namespaces)
-	criuLog.V(1).Info("Resolved mount policy for CRIU dump",
+	external := buildExternalNamespaces(namespaces, log)
+	log.V(1).Info("Resolved mount policy for CRIU dump",
 		"externalized_count", len(mountPolicy.Externalized),
 		"skipped_count", len(mountPolicy.Skipped),
 	)
@@ -229,13 +227,13 @@ func buildExternalMountMaps(paths []string) []*criurpc.ExtMountMap {
 }
 
 // buildExternalNamespaces builds external namespace/mount references.
-func buildExternalNamespaces(namespaces map[NamespaceType]*NamespaceInfo) []string {
+func buildExternalNamespaces(namespaces map[NamespaceType]*NamespaceInfo, log logr.Logger) []string {
 	external := make([]string, 0, 1)
 
 	// Mark network namespace as external for socket binding preservation
 	if netNs, ok := namespaces[NamespaceNet]; ok {
 		external = append(external, fmt.Sprintf("%s[%d]:%s", NamespaceNet, netNs.Inode, "extNetNs"))
-		criuLog.V(1).Info("Marked network namespace as external", "inode", netNs.Inode)
+		log.V(1).Info("Marked network namespace as external", "inode", netNs.Inode)
 	}
 
 	return external

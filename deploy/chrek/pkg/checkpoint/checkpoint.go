@@ -12,7 +12,6 @@ import (
 	"github.com/go-logr/logr"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/protobuf/proto"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/common"
 )
@@ -82,10 +81,10 @@ type Checkpointer struct {
 }
 
 // NewCheckpointer creates a new checkpointer
-func NewCheckpointer(discoveryClient *DiscoveryClient) *Checkpointer {
+func NewCheckpointer(discoveryClient *DiscoveryClient, log logr.Logger) *Checkpointer {
 	return &Checkpointer{
 		discoveryClient: discoveryClient,
-		log:             ctrl.Log.WithName("checkpointer"),
+		log:             log,
 	}
 }
 
@@ -204,6 +203,7 @@ func (c *Checkpointer) configure(
 		state.MountInfo,
 		state.OCISpec,
 		state.Namespaces,
+		c.log,
 	)
 	if err != nil {
 		return nil, nil, err

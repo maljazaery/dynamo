@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
 )
@@ -51,14 +50,14 @@ type Restorer struct {
 }
 
 // NewRestorer creates a new external restore orchestrator.
-func NewRestorer(cfg RestorerConfig, discoveryClient *checkpoint.DiscoveryClient) *Restorer {
+func NewRestorer(cfg RestorerConfig, discoveryClient *checkpoint.DiscoveryClient, log logr.Logger) *Restorer {
 	if cfg.CRIUHelperPath == "" {
 		cfg.CRIUHelperPath = CRIUHelperBinary
 	}
 	return &Restorer{
 		cfg:             cfg,
 		discoveryClient: discoveryClient,
-		log:             ctrl.Log.WithName("restorer"),
+		log:             log,
 	}
 }
 
@@ -369,6 +368,13 @@ func (r *Restorer) logCRIUHelperLine(line string) {
 }
 
 func parseHelperLogLine(line string) (string, string, map[string]interface{}, bool) {
+	// Try zap development console format first (tab-delimited):
+	//   TIMESTAMP\tLEVEL\tLOGGER\tMESSAGE\t{json fields}
+	if level, msg, fields, ok := parseZapDevLine(line); ok {
+		return level, msg, fields, true
+	}
+
+	// Fall back to logfmt (key=value pairs).
 	if !strings.Contains(line, " level=") || !strings.Contains(line, " msg=") {
 		return "info", "", nil, false
 	}
@@ -403,6 +409,47 @@ func parseHelperLogLine(line string) (string, string, map[string]interface{}, bo
 		return "info", "", nil, false
 	}
 	return level, msg, fields, true
+}
+
+// parseZapDevLine parses zap's development console format:
+//
+//	TIMESTAMP\tLEVEL\tLOGGER\tMESSAGE[\t{json fields}]
+//
+// Returns level, message, parsed JSON fields, and whether parsing succeeded.
+func parseZapDevLine(line string) (string, string, map[string]interface{}, bool) {
+	parts := strings.Split(line, "\t")
+	// Need at least: timestamp, level, logger, message
+	if len(parts) < 4 {
+		return "", "", nil, false
+	}
+
+	level := strings.TrimSpace(parts[1])
+	levelLower := strings.ToLower(level)
+	switch levelLower {
+	case "debug", "info", "warn", "warning", "error", "dpanic", "panic", "fatal":
+		// valid zap level
+	default:
+		return "", "", nil, false
+	}
+
+	msg := strings.TrimSpace(parts[3])
+	if msg == "" {
+		return "", "", nil, false
+	}
+
+	// Parse optional JSON structured fields from the 5th tab-separated segment
+	var fields map[string]interface{}
+	if len(parts) >= 5 {
+		jsonStr := strings.TrimSpace(parts[4])
+		if strings.HasPrefix(jsonStr, "{") {
+			parsed := map[string]interface{}{}
+			if err := json.Unmarshal([]byte(jsonStr), &parsed); err == nil {
+				fields = parsed
+			}
+		}
+	}
+
+	return levelLower, msg, fields, true
 }
 
 func splitLogfmtTokens(line string) []string {

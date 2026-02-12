@@ -22,7 +22,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/externalrestore"
@@ -59,7 +58,7 @@ type Watcher struct {
 const restoreReadyTimeout = 2 * time.Minute
 
 // NewWatcher creates a new pod watcher.
-func NewWatcher(cfg WatcherConfig, discoveryClient *checkpoint.DiscoveryClient) (*Watcher, error) {
+func NewWatcher(cfg WatcherConfig, discoveryClient *checkpoint.DiscoveryClient, log logr.Logger) (*Watcher, error) {
 	// Create in-cluster Kubernetes client
 	restConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -80,7 +79,7 @@ func NewWatcher(cfg WatcherConfig, discoveryClient *checkpoint.DiscoveryClient) 
 		clientset:       clientset,
 		agentClient:     externalrestore.NewClient(cfg.AgentSocketPath),
 		discoveryClient: discoveryClient,
-		log:             ctrl.Log.WithName("watcher"),
+		log:             log,
 		inFlight:        make(map[string]struct{}),
 		stopCh:          make(chan struct{}),
 	}, nil

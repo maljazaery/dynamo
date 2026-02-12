@@ -28,10 +28,9 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	gozap "go.uber.org/zap"
+	"github.com/go-logr/zapr"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	ctrl "sigs.k8s.io/controller-runtime"
-	ctrlzap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	criu "github.com/checkpoint-restore/go-criu/v8"
 	"github.com/checkpoint-restore/go-criu/v8/crit"
@@ -60,14 +59,14 @@ const (
 )
 
 func main() {
-	configureLogging()
+	rootLog := configureLogging()
 
 	checkpointPath := flag.String("checkpoint-path", "", "Path to checkpoint directory")
 	workDir := flag.String("work-dir", "", "CRIU work directory")
 	cudaDeviceMap := flag.String("cuda-device-map", "", "CUDA device map for cuda-checkpoint restore")
 	flag.Parse()
 
-	log := ctrl.Log.WithName("criu-helper")
+	log := rootLog.WithName("criu-helper")
 
 	if *checkpointPath == "" {
 		fatal(log, nil, "--checkpoint-path is required")
@@ -78,40 +77,46 @@ func main() {
 	}
 }
 
-func configureLogging() {
+func configureLogging() logr.Logger {
 	level := strings.TrimSpace(strings.ToLower(os.Getenv("CHREK_LOG_LEVEL")))
 	if level == "" {
 		level = "info"
 	}
 
-	atomicLevel := gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+	zapLevel := zapcore.InfoLevel
 	parseErr := error(nil)
 	switch level {
 	case "trace", "debug":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.DebugLevel)
+		zapLevel = zapcore.DebugLevel
 	case "info":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+		zapLevel = zapcore.InfoLevel
 	case "warn", "warning":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.WarnLevel)
+		zapLevel = zapcore.WarnLevel
 	case "error":
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.ErrorLevel)
+		zapLevel = zapcore.ErrorLevel
 	default:
 		parseErr = fmt.Errorf("invalid level %q", level)
 	}
-	if parseErr != nil {
-		atomicLevel = gozap.NewAtomicLevelAt(zapcore.InfoLevel)
+
+	zapCfg := zap.Config{
+		Level:            zap.NewAtomicLevelAt(zapLevel),
+		Development:      true,
+		Encoding:         "console",
+		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
+		OutputPaths:      []string{"stdout"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+	zapLog, err := zapCfg.Build()
+	if err != nil {
+		zapLog, _ = zap.NewDevelopment()
 	}
 
-	opts := ctrlzap.Options{
-		Development: true,
-		Level:       &atomicLevel,
-		TimeEncoder: zapcore.RFC3339NanoTimeEncoder,
-	}
-	ctrl.SetLogger(ctrlzap.New(ctrlzap.UseFlagOptions(&opts), ctrlzap.WriteTo(os.Stdout)))
-
+	log := zapr.NewLogger(zapLog)
 	if parseErr != nil {
-		ctrl.Log.WithName("setup").Info("Invalid CHREK_LOG_LEVEL, falling back to info", "value", level, "error", parseErr)
+		log.WithName("setup").Info("Invalid CHREK_LOG_LEVEL, falling back to info", "value", level, "error", parseErr)
 	}
+	return log
 }
 
 func fatal(log logr.Logger, err error, msg string, keysAndValues ...interface{}) {
@@ -358,11 +363,11 @@ func restoreCUDA(ctx context.Context, manifest *checkpoint.CheckpointManifest, r
 		if len(cudaPIDs) > 0 {
 			for _, pid := range cudaPIDs {
 				log.Info("Running cuda-checkpoint restore", "pid", pid, "device_map", deviceMap)
-				if err := runCudaCheckpoint(ctx, pid, cudaActionRestore, deviceMap); err != nil {
+				if err := runCudaCheckpoint(ctx, pid, cudaActionRestore, deviceMap, log); err != nil {
 					return fmt.Errorf("cuda restore failed for PID %d: %w", pid, err)
 				}
 				log.Info("Running cuda-checkpoint unlock", "pid", pid)
-				if err := runCudaCheckpoint(ctx, pid, cudaActionUnlock, ""); err != nil {
+				if err := runCudaCheckpoint(ctx, pid, cudaActionUnlock, "", log); err != nil {
 					return fmt.Errorf("cuda unlock failed for PID %d: %w", pid, err)
 				}
 			}
@@ -436,7 +441,7 @@ func isCUDAProcess(ctx context.Context, pid int) (bool, error) {
 	return true, nil
 }
 
-func runCudaCheckpoint(ctx context.Context, pid int, action string, deviceMap string) error {
+func runCudaCheckpoint(ctx context.Context, pid int, action string, deviceMap string, log logr.Logger) error {
 	actionCtx, cancel := context.WithTimeout(ctx, cudaActionTimeout)
 	defer cancel()
 
@@ -455,7 +460,7 @@ func runCudaCheckpoint(ctx context.Context, pid int, action string, deviceMap st
 		}
 		return fmt.Errorf("cuda-checkpoint %v failed for pid %d after %s: %w (output: %s)", args, pid, duration, err, out)
 	}
-	ctrl.Log.WithName("criu-helper").Info("cuda-checkpoint command succeeded",
+	log.Info("cuda-checkpoint command succeeded",
 		"pid", pid,
 		"action", action,
 		"duration", duration,

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/checkpoint"
 )
@@ -44,12 +43,12 @@ type Server struct {
 }
 
 // NewServer creates a new UDS server.
-func NewServer(cfg ServerConfig, checkpointer *checkpoint.Checkpointer, restorer *Restorer) *Server {
+func NewServer(cfg ServerConfig, checkpointer *checkpoint.Checkpointer, restorer *Restorer, log logr.Logger) *Server {
 	s := &Server{
 		cfg:          cfg,
 		restorer:     restorer,
 		checkpointer: checkpointer,
-		log:          ctrl.Log.WithName("uds-server"),
+		log:          log,
 	}
 
 	mux := http.NewServeMux()

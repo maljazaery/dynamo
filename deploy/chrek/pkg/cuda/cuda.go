@@ -124,62 +124,6 @@ func UnlockProcesses(ctx context.Context, pids []int, log logr.Logger) {
 	}
 }
 
-// RestoreExternal performs CUDA restore from the DaemonSet side using cgroup-based PID discovery.
-func RestoreExternal(ctx context.Context, m *manifest.CheckpointManifest, podName, podNamespace, containerName string, containerPID int, restoredPID int, log logr.Logger) error {
-	if m.ExternalRestore == nil || m.ExternalRestore.CUDA == nil {
-		log.V(1).Info("No CUDA restore data in manifest, skipping")
-		return nil
-	}
-
-	cudaData := m.ExternalRestore.CUDA
-	if len(cudaData.PIDs) == 0 {
-		log.V(1).Info("No CUDA PIDs recorded, skipping")
-		return nil
-	}
-
-	targetUUIDs, err := GetPodGPUUUIDsWithRetry(ctx, podName, podNamespace, containerName, log)
-	if err != nil {
-		return fmt.Errorf("failed to get target GPU UUIDs: %w", err)
-	}
-	if len(cudaData.SourceGPUUUIDs) == 0 {
-		return fmt.Errorf("missing source GPU UUIDs in checkpoint manifest")
-	}
-	if len(targetUUIDs) == 0 {
-		return fmt.Errorf("missing target GPU UUIDs for %s/%s container %s", podNamespace, podName, containerName)
-	}
-	deviceMap, err := BuildDeviceMap(cudaData.SourceGPUUUIDs, targetUUIDs)
-	if err != nil {
-		return fmt.Errorf("failed to build CUDA device map: %w", err)
-	}
-
-	cgroupPath, err := getContainerCgroupPath(containerPID)
-	if err != nil {
-		return fmt.Errorf("failed to get container cgroup path: %w", err)
-	}
-	cudaPIDs, err := findRestoredCUDAPIDs(ctx, cgroupPath, restoredPID, log)
-	if err != nil {
-		return fmt.Errorf("failed to discover restored CUDA PIDs: %w", err)
-	}
-	if len(cudaPIDs) == 0 {
-		return fmt.Errorf("checkpoint captured %d CUDA PIDs but none found in restored cgroup %s", len(cudaData.PIDs), cgroupPath)
-	}
-
-	for _, pid := range cudaPIDs {
-		if err := runCudaCheckpoint(ctx, pid, actionRestore, deviceMap); err != nil {
-			return fmt.Errorf("cuda restore failed for PID %d: %w", pid, err)
-		}
-		if err := runCudaCheckpoint(ctx, pid, actionUnlock, ""); err != nil {
-			return fmt.Errorf("cuda unlock failed for PID %d: %w", pid, err)
-		}
-	}
-
-	log.Info("CUDA restore completed",
-		"cuda_pids", len(cudaPIDs),
-		"device_map", deviceMap,
-	)
-	return nil
-}
-
 // RestoreInNamespace performs CUDA restore from inside the container namespace
 // (called by ns-restore-runner). Uses process tree walking instead of cgroup discovery.
 func RestoreInNamespace(ctx context.Context, m *manifest.CheckpointManifest, restoredPID int, deviceMap string, log logr.Logger) error {
@@ -396,63 +340,6 @@ func runCudaCheckpoint(ctx context.Context, pid int, action checkpointAction, de
 		return fmt.Errorf("cuda-checkpoint %v failed for pid %d: %w (output: %s)", args, pid, err, strings.TrimSpace(string(output)))
 	}
 	return nil
-}
-
-func findRestoredCUDAPIDs(ctx context.Context, cgroupPath string, restoredPID int, log logr.Logger) ([]int, error) {
-	ticker := time.NewTicker(cudaDiscoverTick)
-	defer ticker.Stop()
-
-	attempt := 0
-	for {
-		attempt++
-		cgroupPIDs, err := getCgroupPIDs(cgroupPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list restored cgroup PIDs from %s: %w", cgroupPath, err)
-		}
-
-		candidates := make([]int, 0, len(cgroupPIDs)+1)
-		seen := make(map[int]struct{}, len(cgroupPIDs)+1)
-		if restoredPID > 0 {
-			candidates = append(candidates, restoredPID)
-			seen[restoredPID] = struct{}{}
-		}
-		for _, pid := range cgroupPIDs {
-			if _, ok := seen[pid]; ok {
-				continue
-			}
-			candidates = append(candidates, pid)
-			seen[pid] = struct{}{}
-		}
-
-		cudaPIDs := make([]int, 0, len(candidates))
-		for _, pid := range candidates {
-			ok, err := IsCUDAProcess(ctx, pid)
-			if err != nil {
-				log.V(1).Info("Failed CUDA state probe", "pid", pid, "error", err)
-				continue
-			}
-			if ok {
-				cudaPIDs = append(cudaPIDs, pid)
-			}
-		}
-
-		log.Info("CUDA restore PID discovery attempt",
-			"attempt", attempt,
-			"cgroup_path", cgroupPath,
-			"cgroup_pids", len(cgroupPIDs),
-			"candidates", len(candidates),
-			"cuda_pids", len(cudaPIDs),
-		)
-		if len(cudaPIDs) > 0 {
-			return cudaPIDs, nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil, nil
-		case <-ticker.C:
-		}
-	}
 }
 
 func getPodGPUUUIDs(ctx context.Context, podName, podNamespace, containerName string) ([]string, error) {

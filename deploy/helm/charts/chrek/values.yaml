@@ -127,7 +127,7 @@ config:
 
   checkpoint:
     criu:
-      # Ghost file size limit in bytes (512MB recommended for GPU workloads)
+      # Ghost file size limit in bytes
       ghostLimit: 536870912
       # CRIU logging verbosity (0-4)
       logLevel: 4
@@ -144,6 +144,12 @@ config:
       linkRemap: true         # Handle deleted-but-open files
       extMasters: true        # External bind mount masters
       manageCgroupsMode: "ignore"    # Ignore cgroup management for restore (ignore/soft/full/strict)
+
+      # Restore-specific options (only apply during CRIU restore, not dump)
+      rstSibling: true         # Restore as sibling process (required for go-criu swrk mode)
+      mntnsCompatMode: false   # Mount namespace compatibility mode
+      evasiveDevices: true     # Use any device path if original is inaccessible
+      forceIrmap: true         # Force resolving inotify/fsnotify watch names
 
       # Advanced options
       autoDedup: false        # Auto-deduplication of memory pages

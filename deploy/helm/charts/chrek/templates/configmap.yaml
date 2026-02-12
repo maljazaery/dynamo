@@ -39,6 +39,11 @@ data:
         linkRemap: {{ .Values.config.checkpoint.criu.linkRemap }}
         extMasters: {{ .Values.config.checkpoint.criu.extMasters }}
         manageCgroupsMode: {{ .Values.config.checkpoint.criu.manageCgroupsMode | quote }}
+        # Restore-specific options
+        rstSibling: {{ .Values.config.checkpoint.criu.rstSibling }}
+        mntnsCompatMode: {{ .Values.config.checkpoint.criu.mntnsCompatMode }}
+        evasiveDevices: {{ .Values.config.checkpoint.criu.evasiveDevices }}
+        forceIrmap: {{ .Values.config.checkpoint.criu.forceIrmap }}
         # Advanced options
         autoDedup: {{ .Values.config.checkpoint.criu.autoDedup }}
         lazyPages: {{ .Values.config.checkpoint.criu.lazyPages }}

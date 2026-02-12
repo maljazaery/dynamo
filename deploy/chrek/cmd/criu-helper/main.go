@@ -55,12 +55,24 @@ const (
 	cudaDiscoverTick  = 1 * time.Second
 )
 
+// restoreOptions holds restore-specific CRIU options passed via CLI flags from the DaemonSet agent.
+type restoreOptions struct {
+	RstSibling      bool
+	MntnsCompatMode bool
+	EvasiveDevices  bool
+	ForceIrmap      bool
+}
+
 func main() {
 	rootLog := configureLogging()
 
 	checkpointPath := flag.String("checkpoint-path", "", "Path to checkpoint directory")
 	workDir := flag.String("work-dir", "", "CRIU work directory")
 	cudaDeviceMap := flag.String("cuda-device-map", "", "CUDA device map for cuda-checkpoint restore")
+	rstSibling := flag.Bool("rst-sibling", false, "Restore process as sibling (required for go-criu swrk mode)")
+	mntnsCompatMode := flag.Bool("mntns-compat-mode", false, "Enable mount namespace compatibility mode")
+	evasiveDevices := flag.Bool("evasive-devices", false, "Use any device path if original is inaccessible")
+	forceIrmap := flag.Bool("force-irmap", false, "Force resolving inotify/fsnotify watch names")
 	flag.Parse()
 
 	log := rootLog.WithName("criu-helper")
@@ -69,7 +81,14 @@ func main() {
 		fatal(log, nil, "--checkpoint-path is required")
 	}
 
-	if err := run(*checkpointPath, *workDir, *cudaDeviceMap, log); err != nil {
+	restoreOpts := restoreOptions{
+		RstSibling:      *rstSibling,
+		MntnsCompatMode: *mntnsCompatMode,
+		EvasiveDevices:  *evasiveDevices,
+		ForceIrmap:      *forceIrmap,
+	}
+
+	if err := run(*checkpointPath, *workDir, *cudaDeviceMap, restoreOpts, log); err != nil {
 		fatal(log, err, "CRIU restore failed")
 	}
 }
@@ -125,7 +144,7 @@ func fatal(log logr.Logger, err error, msg string, keysAndValues ...interface{})
 	os.Exit(1)
 }
 
-func run(checkpointPath, workDir, cudaDeviceMap string, log logr.Logger) error {
+func run(checkpointPath, workDir, cudaDeviceMap string, opts restoreOptions, log logr.Logger) error {
 	restoreStart := time.Now()
 	log.Info("Starting criu-helper restore workflow",
 		"checkpoint_path", checkpointPath,
@@ -205,7 +224,7 @@ func run(checkpointPath, workDir, cudaDeviceMap string, log logr.Logger) error {
 	)
 
 	// Build CRIU restore options
-	criuOpts := buildRestoreOptions(manifest, imageDirFD, workDirFD, extMounts)
+	criuOpts := buildRestoreOptions(manifest, imageDirFD, workDirFD, extMounts, opts)
 	log.Info("Constructed CRIU restore options",
 		"images_dir_fd", criuOpts.GetImagesDirFd(),
 		"work_dir_fd", criuOpts.GetWorkDirFd(),
@@ -664,8 +683,9 @@ func generateExtMountMaps(manifest *checkpoint.CheckpointManifest) ([]*criurpc.E
 	return maps, nil
 }
 
-// buildRestoreOptions creates CRIU options for restore from the checkpoint manifest.
-func buildRestoreOptions(manifest *checkpoint.CheckpointManifest, imageDirFD, workDirFD int32, extMounts []*criurpc.ExtMountMap) *criurpc.CriuOpts {
+// buildRestoreOptions creates CRIU options for restore from the checkpoint manifest
+// and restore-specific options passed via CLI flags from the DaemonSet agent.
+func buildRestoreOptions(manifest *checkpoint.CheckpointManifest, imageDirFD, workDirFD int32, extMounts []*criurpc.ExtMountMap, restoreOpts restoreOptions) *criurpc.CriuOpts {
 	settings := manifest.CRIUDump.CRIU
 
 	var cgMode criurpc.CriuCgMode
@@ -680,17 +700,17 @@ func buildRestoreOptions(manifest *checkpoint.CheckpointManifest, imageDirFD, wo
 		cgMode = criurpc.CriuCgMode_IGNORE
 	}
 
-	opts := &criurpc.CriuOpts{
+	criuOpts := &criurpc.CriuOpts{
 		ImagesDirFd: proto.Int32(imageDirFD),
 		LogLevel:    proto.Int32(settings.LogLevel),
 		LogFile:     proto.String(restoreLogFile),
 		Root:        proto.String("/"),
 
-		// Restore-specific options
-		RstSibling:      proto.Bool(true),
-		MntnsCompatMode: proto.Bool(false),
-		EvasiveDevices:  proto.Bool(true),
-		ForceIrmap:      proto.Bool(true),
+		// Restore-specific options (from ConfigMap via CLI flags)
+		RstSibling:      proto.Bool(restoreOpts.RstSibling),
+		MntnsCompatMode: proto.Bool(restoreOpts.MntnsCompatMode),
+		EvasiveDevices:  proto.Bool(restoreOpts.EvasiveDevices),
+		ForceIrmap:      proto.Bool(restoreOpts.ForceIrmap),
 
 		// Options from saved checkpoint
 		ShellJob:          proto.Bool(settings.ShellJob),
@@ -706,9 +726,9 @@ func buildRestoreOptions(manifest *checkpoint.CheckpointManifest, imageDirFD, wo
 	}
 
 	if workDirFD >= 0 {
-		opts.WorkDirFd = proto.Int32(workDirFD)
+		criuOpts.WorkDirFd = proto.Int32(workDirFD)
 	}
-	return opts
+	return criuOpts
 }
 
 // remountProcSys remounts /proc/sys as rw (true) or ro (false).

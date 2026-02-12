@@ -63,6 +63,22 @@ type CRIUSettings struct {
 	// ManageCgroupsMode controls cgroup handling: ignore/soft/full/strict.
 	ManageCgroupsMode string `yaml:"manageCgroupsMode"`
 
+	// === Restore-specific RPC Options ===
+	// These only apply during CRIU restore (not dump). They are passed from the
+	// ConfigMap to criu-helper via CLI flags at restore time.
+
+	// RstSibling restores the process as a sibling (required for swrk/go-criu restore).
+	RstSibling bool `yaml:"rstSibling"`
+
+	// MntnsCompatMode enables mount namespace compatibility mode in CRIU restore.
+	MntnsCompatMode bool `yaml:"mntnsCompatMode"`
+
+	// EvasiveDevices allows CRIU to use any path to a device file if the original is inaccessible.
+	EvasiveDevices bool `yaml:"evasiveDevices"`
+
+	// ForceIrmap forces resolving names for inotify/fsnotify watches during restore.
+	ForceIrmap bool `yaml:"forceIrmap"`
+
 	// === CRIU Conf File Options (NOT available via RPC - written to criu.conf) ===
 
 	// LibDir is the path to CRIU plugin directory (e.g., /usr/local/lib/criu).

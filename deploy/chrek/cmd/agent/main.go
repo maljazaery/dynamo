@@ -47,6 +47,7 @@ func main() {
 	restorer := externalrestore.NewRestorer(
 		externalrestore.RestorerConfig{
 			CheckpointBasePath: cfg.Checkpoint.BasePath,
+			CRIUSettings:       &cfg.Checkpoint.CRIU,
 		},
 		discoveryClient,
 		rootLog.WithName("restorer"),

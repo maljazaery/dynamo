@@ -38,8 +38,9 @@ const (
 
 // RestorerConfig holds configuration for the external restore orchestrator.
 type RestorerConfig struct {
-	CheckpointBasePath string // Base path for checkpoint storage (PVC mount)
-	CRIUHelperPath     string // Path to criu-helper binary (default: CRIUHelperBinary)
+	CheckpointBasePath string                  // Base path for checkpoint storage (PVC mount)
+	CRIUHelperPath     string                  // Path to criu-helper binary (default: CRIUHelperBinary)
+	CRIUSettings       *checkpoint.CRIUSettings // CRIU settings from ConfigMap (restore-specific options)
 }
 
 // Restorer orchestrates external restore operations from the DaemonSet.
@@ -214,6 +215,22 @@ func (r *Restorer) executeCRIURestore(ctx context.Context, placeholderPID int, c
 	}
 	if cudaDeviceMap != "" {
 		args = append(args, "--cuda-device-map", cudaDeviceMap)
+	}
+
+	// Pass restore-specific CRIU options from ConfigMap
+	if r.cfg.CRIUSettings != nil {
+		if r.cfg.CRIUSettings.RstSibling {
+			args = append(args, "--rst-sibling")
+		}
+		if r.cfg.CRIUSettings.MntnsCompatMode {
+			args = append(args, "--mntns-compat-mode")
+		}
+		if r.cfg.CRIUSettings.EvasiveDevices {
+			args = append(args, "--evasive-devices")
+		}
+		if r.cfg.CRIUSettings.ForceIrmap {
+			args = append(args, "--force-irmap")
+		}
 	}
 
 	cmd := exec.CommandContext(ctx, "nsenter", args...)

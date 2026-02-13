@@ -1,4 +1,4 @@
-package cuda
+package inspect
 
 import (
 	"context"
@@ -11,9 +11,15 @@ import (
 	podresourcesv1 "k8s.io/kubelet/pkg/apis/podresources/v1"
 )
 
+const (
+	podResourcesSocket = "/var/lib/kubelet/pod-resources/kubelet.sock"
+	nvidiaGPUResource  = "nvidia.com/gpu"
+	gpuDiscoverTick    = 1 * time.Second
+)
+
 // GetPodGPUUUIDsWithRetry resolves GPU UUIDs for a pod/container from kubelet pod-resources API.
 func GetPodGPUUUIDsWithRetry(ctx context.Context, podName, podNamespace, containerName string, log logr.Logger) ([]string, error) {
-	ticker := time.NewTicker(podGPUDiscoverTick)
+	ticker := time.NewTicker(gpuDiscoverTick)
 	defer ticker.Stop()
 
 	attempt := 0

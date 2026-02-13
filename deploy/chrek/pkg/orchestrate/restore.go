@@ -14,9 +14,9 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/filesystem"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
 )
@@ -30,12 +30,12 @@ type RestorerConfig struct {
 // Restorer orchestrates external restore operations from the DaemonSet.
 type Restorer struct {
 	cfg             RestorerConfig
-	discoveryClient *containerd.DiscoveryClient
+	discoveryClient *inspect.Client
 	log             logr.Logger
 }
 
 // NewRestorer creates a new external restore orchestrator.
-func NewRestorer(cfg RestorerConfig, discoveryClient *containerd.DiscoveryClient, log logr.Logger) *Restorer {
+func NewRestorer(cfg RestorerConfig, discoveryClient *inspect.Client, log logr.Logger) *Restorer {
 	return &Restorer{
 		cfg:             cfg,
 		discoveryClient: discoveryClient,
@@ -91,7 +91,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		if len(m.CUDA.SourceGPUUUIDs) == 0 {
 			return nil, fmt.Errorf("missing source GPU UUIDs in checkpoint manifest")
 		}
-		targetGPUUUIDs, err := cuda.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, containerName, r.log)
+		targetGPUUUIDs, err := inspect.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, containerName, r.log)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get target GPU UUIDs: %w", err)
 		}

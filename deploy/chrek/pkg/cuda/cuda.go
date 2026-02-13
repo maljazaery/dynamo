@@ -11,16 +11,14 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
 )
 
 const (
 	cudaCheckpointBinary = "/usr/local/sbin/cuda-checkpoint"
-	podResourcesSocket   = "/var/lib/kubelet/pod-resources/kubelet.sock"
-	nvidiaGPUResource    = "nvidia.com/gpu"
 	hostCgroupPath       = "/sys/fs/cgroup"
 	cudaDiscoverTick     = 1 * time.Second
-	podGPUDiscoverTick   = 1 * time.Second
 )
 
 // CheckpointRequest holds per-request identifiers needed for CUDA checkpoint.
@@ -65,7 +63,7 @@ func PrepareCheckpoint(ctx context.Context, req CheckpointRequest, sourcePID int
 		}
 	}
 
-	sourceGPUUUIDs, err := GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, req.ContainerName, log)
+	sourceGPUUUIDs, err := inspect.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, req.ContainerName, log)
 	if err != nil {
 		return fmt.Errorf("failed to discover source GPU UUIDs: %w", err)
 	}

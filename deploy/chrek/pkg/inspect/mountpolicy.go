@@ -1,4 +1,4 @@
-package mounts
+package inspect
 
 import (
 	"path"
@@ -8,20 +8,20 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// Policy is the classified mount plan for CRIU dump options.
-type Policy struct {
+// MountPolicy is the classified mount plan for CRIU dump options.
+type MountPolicy struct {
 	Externalized []string
 	Skipped      []string
 }
 
-// BuildPolicy classifies mounts into CRIU extMnt and skipMnt lists.
+// BuildMountPolicy classifies mounts into CRIU extMnt and skipMnt lists.
 //
 // Rule order and precedence (top to bottom):
 //  1. Skip non-OCI proc/sys submounts and non-OCI runtime /run submounts.
 //  2. Externalize everything else.
 //
 // Precedence: skip > externalize.
-func BuildPolicy(mountInfo []Info, ociSpec *specs.Spec, rootFS string) *Policy {
+func BuildMountPolicy(mountInfo []MountInfo, ociSpec *specs.Spec, rootFS string) *MountPolicy {
 	ociManagedSet := collectOCIManagedDestinations(ociSpec, rootFS)
 
 	externalizedSet := make(map[string]struct{}, len(mountInfo)+len(ociManagedSet))
@@ -82,7 +82,7 @@ func BuildPolicy(mountInfo []Info, ociSpec *specs.Spec, rootFS string) *Policy {
 		skipped = append(skipped, mp)
 	}
 
-	return &Policy{
+	return &MountPolicy{
 		Externalized: externalized,
 		Skipped:      skipped,
 	}

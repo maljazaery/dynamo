@@ -10,7 +10,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/namespace"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 )
 
 // CheckpointManifest is saved as manifest.yaml at checkpoint time and loaded at restore.
@@ -127,12 +127,12 @@ func NewFilesystemManifest(exclusions config.FilesystemConfig, upperDir string, 
 }
 
 type NamespaceManifest struct {
-	Entries []namespace.NamespaceInfo `yaml:"entries,omitempty"`
+	Entries []inspect.NamespaceInfo `yaml:"entries,omitempty"`
 }
 
-func NewNamespaceManifest(namespaces map[namespace.Type]*namespace.NamespaceInfo) NamespaceManifest {
+func NewNamespaceManifest(namespaces map[inspect.NamespaceType]*inspect.NamespaceInfo) NamespaceManifest {
 	manifest := NamespaceManifest{
-		Entries: make([]namespace.NamespaceInfo, 0, len(namespaces)),
+		Entries: make([]inspect.NamespaceInfo, 0, len(namespaces)),
 	}
 	if len(namespaces) == 0 {
 		return manifest
@@ -144,9 +144,9 @@ func NewNamespaceManifest(namespaces map[namespace.Type]*namespace.NamespaceInfo
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		nsInfo := namespaces[namespace.Type(key)]
-		manifest.Entries = append(manifest.Entries, namespace.NamespaceInfo{
-			Type:       namespace.Type(key),
+		nsInfo := namespaces[inspect.NamespaceType(key)]
+		manifest.Entries = append(manifest.Entries, inspect.NamespaceInfo{
+			Type:       inspect.NamespaceType(key),
 			Inode:      nsInfo.Inode,
 			IsExternal: nsInfo.IsExternal,
 		})

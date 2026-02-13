@@ -16,14 +16,12 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu"
 	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/filesystem"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/mounts"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/namespace"
 )
 
 // CheckpointRequest holds per-checkpoint identifiers for a checkpoint operation.
@@ -50,18 +48,18 @@ type containerSnapshot struct {
 	RootFS     string
 	UpperDir   string
 	OCISpec    *specs.Spec
-	MountInfo  []mounts.Info
-	Namespaces map[namespace.Type]*namespace.NamespaceInfo
+	MountInfo  []inspect.MountInfo
+	Namespaces map[inspect.NamespaceType]*inspect.NamespaceInfo
 }
 
 // Checkpointer performs CRIU checkpoint operations.
 type Checkpointer struct {
-	discoveryClient *containerd.DiscoveryClient
+	discoveryClient *inspect.Client
 	log             logr.Logger
 }
 
 // NewCheckpointer creates a new checkpointer.
-func NewCheckpointer(discoveryClient *containerd.DiscoveryClient, log logr.Logger) *Checkpointer {
+func NewCheckpointer(discoveryClient *inspect.Client, log logr.Logger) *Checkpointer {
 	return &Checkpointer{
 		discoveryClient: discoveryClient,
 		log:             log,
@@ -136,19 +134,19 @@ func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*con
 		return nil, fmt.Errorf("failed to resolve container: %w", err)
 	}
 
-	rootFS, err := filesystem.GetRootFS(pid)
+	rootFS, err := inspect.GetRootFS(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rootfs: %w", err)
 	}
-	upperDir, err := filesystem.GetOverlayUpperDir(pid)
+	upperDir, err := inspect.GetOverlayUpperDir(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get overlay upperdir: %w", err)
 	}
-	mountInfo, err := mounts.ReadFromHostProc(pid)
+	mountInfo, err := inspect.ReadMountInfo(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse mountinfo: %w", err)
 	}
-	namespaces, err := namespace.GetAll(pid)
+	namespaces, err := inspect.GetAllNamespaces(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get namespaces: %w", err)
 	}

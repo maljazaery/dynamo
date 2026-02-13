@@ -11,8 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/mounts"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/namespace"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 )
 
 // GenerateCRIUConfContent generates the criu.conf file content for options
@@ -39,12 +38,12 @@ func BuildDumpOptions(
 	pid int,
 	imageDirFD int32,
 	rootFS string,
-	mountInfo []mounts.Info,
+	mountInfo []inspect.MountInfo,
 	ociSpec *specs.Spec,
-	namespaces map[namespace.Type]*namespace.NamespaceInfo,
+	namespaces map[inspect.NamespaceType]*inspect.NamespaceInfo,
 	log logr.Logger,
 ) (*criurpc.CriuOpts, error) {
-	mountPolicy := mounts.BuildPolicy(mountInfo, ociSpec, rootFS)
+	mountPolicy := inspect.BuildMountPolicy(mountInfo, ociSpec, rootFS)
 
 	extMnt := buildExternalMountMaps(mountPolicy.Externalized)
 	skipMnt := mountPolicy.Skipped
@@ -120,11 +119,11 @@ func ExecuteDump(criuOpts *criurpc.CriuOpts, checkpointDir string, log logr.Logg
 	return criuDumpDuration, nil
 }
 
-func buildExternalNamespaces(namespaces map[namespace.Type]*namespace.NamespaceInfo, log logr.Logger) []string {
+func buildExternalNamespaces(namespaces map[inspect.NamespaceType]*inspect.NamespaceInfo, log logr.Logger) []string {
 	external := make([]string, 0, 1)
 
-	if netNs, ok := namespaces[namespace.Net]; ok {
-		external = append(external, fmt.Sprintf("%s[%d]:%s", namespace.Net, netNs.Inode, "extNetNs"))
+	if netNs, ok := namespaces[inspect.NSNet]; ok {
+		external = append(external, fmt.Sprintf("%s[%d]:%s", inspect.NSNet, netNs.Inode, "extNetNs"))
 		log.V(1).Info("Marked network namespace as external", "inode", netNs.Inode)
 	}
 

@@ -12,7 +12,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/logging"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/watcher"
@@ -30,7 +30,7 @@ func main() {
 		fatal(agentLog, err, "Invalid configuration")
 	}
 
-	discoveryClient, err := containerd.NewDiscoveryClient()
+	discoveryClient, err := inspect.NewClient()
 	if err != nil {
 		fatal(agentLog, err, "Failed to create discovery client")
 	}

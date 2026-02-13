@@ -1,5 +1,4 @@
-// Package namespace provides Linux namespace introspection for checkpoint/restore.
-package namespace
+package inspect
 
 import (
 	"fmt"
@@ -9,28 +8,28 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 )
 
-// Type represents a Linux namespace type.
-type Type string
+// NamespaceType represents a Linux namespace type.
+type NamespaceType string
 
 const (
-	Net    Type = "net"
-	PID    Type = "pid"
-	Mnt    Type = "mnt"
-	UTS    Type = "uts"
-	IPC    Type = "ipc"
-	User   Type = "user"
-	Cgroup Type = "cgroup"
+	NSNet    NamespaceType = "net"
+	NSPID    NamespaceType = "pid"
+	NSMnt    NamespaceType = "mnt"
+	NSUTS    NamespaceType = "uts"
+	NSIPC    NamespaceType = "ipc"
+	NSUser   NamespaceType = "user"
+	NSCgroup NamespaceType = "cgroup"
 )
 
 // NamespaceInfo holds namespace identification information.
 type NamespaceInfo struct {
-	Type       Type   `yaml:"type"`
-	Inode      uint64 `yaml:"inode"`
-	IsExternal bool   `yaml:"isExternal"` // Whether NS is external (shared with pause container)
+	Type       NamespaceType `yaml:"type"`
+	Inode      uint64        `yaml:"inode"`
+	IsExternal bool          `yaml:"isExternal"` // Whether NS is external (shared with pause container)
 }
 
 // getNamespaceInfo returns detailed namespace information for a process.
-func getNamespaceInfo(pid int, nsType Type) (*NamespaceInfo, error) {
+func getNamespaceInfo(pid int, nsType NamespaceType) (*NamespaceInfo, error) {
 	nsPath := fmt.Sprintf("%s/%d/ns/%s", config.HostProcPath, pid, nsType)
 
 	var stat unix.Stat_t
@@ -53,11 +52,11 @@ func getNamespaceInfo(pid int, nsType Type) (*NamespaceInfo, error) {
 	}, nil
 }
 
-// GetAll returns information about all namespaces for a process.
-func GetAll(pid int) (map[Type]*NamespaceInfo, error) {
-	nsTypes := []Type{Net, PID, Mnt, UTS, IPC, User, Cgroup}
+// GetAllNamespaces returns information about all namespaces for a process.
+func GetAllNamespaces(pid int) (map[NamespaceType]*NamespaceInfo, error) {
+	nsTypes := []NamespaceType{NSNet, NSPID, NSMnt, NSUTS, NSIPC, NSUser, NSCgroup}
 
-	namespaces := make(map[Type]*NamespaceInfo)
+	namespaces := make(map[NamespaceType]*NamespaceInfo)
 	for _, nsType := range nsTypes {
 		if info, err := getNamespaceInfo(pid, nsType); err == nil {
 			namespaces[nsType] = info

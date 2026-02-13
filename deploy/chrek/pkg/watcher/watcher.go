@@ -26,7 +26,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
 )
 
@@ -43,7 +43,7 @@ type Watcher struct {
 	clientset       kubernetes.Interface
 	checkpointer    *orchestrate.Checkpointer
 	restorer        *orchestrate.Restorer
-	discoveryClient *containerd.DiscoveryClient
+	discoveryClient *inspect.Client
 	log             logr.Logger
 
 	inFlight   map[string]struct{}
@@ -57,7 +57,7 @@ func NewWatcher(
 	cfg Config,
 	checkpointer *orchestrate.Checkpointer,
 	restorer *orchestrate.Restorer,
-	discoveryClient *containerd.DiscoveryClient,
+	discoveryClient *inspect.Client,
 	log logr.Logger,
 ) (*Watcher, error) {
 	restConfig, err := rest.InClusterConfig()

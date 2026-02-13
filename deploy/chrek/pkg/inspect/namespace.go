@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"fmt"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
@@ -57,11 +58,18 @@ func GetAllNamespaces(pid int) (map[NamespaceType]*NamespaceInfo, error) {
 	nsTypes := []NamespaceType{NSNet, NSPID, NSMnt, NSUTS, NSIPC, NSUser, NSCgroup}
 
 	namespaces := make(map[NamespaceType]*NamespaceInfo)
+	var errs []string
 	for _, nsType := range nsTypes {
-		if info, err := getNamespaceInfo(pid, nsType); err == nil {
-			namespaces[nsType] = info
+		info, err := getNamespaceInfo(pid, nsType)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", nsType, err))
+			continue
 		}
+		namespaces[nsType] = info
 	}
 
+	if len(errs) > 0 {
+		return namespaces, fmt.Errorf("failed to inspect some namespaces: %s", strings.Join(errs, "; "))
+	}
 	return namespaces, nil
 }

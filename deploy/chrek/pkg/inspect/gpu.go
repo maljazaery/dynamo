@@ -51,7 +51,7 @@ func GetPodGPUUUIDsWithRetry(ctx context.Context, podName, podNamespace, contain
 			if lastErr != nil {
 				return nil, lastErr
 			}
-			return nil, nil
+			return nil, ctx.Err()
 		case <-ticker.C:
 		}
 	}

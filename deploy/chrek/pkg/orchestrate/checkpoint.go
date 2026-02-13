@@ -80,6 +80,9 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 
 	finalDir := filepath.Join(req.CheckpointDir, req.CheckpointHash)
 	tmpDir := filepath.Join(req.CheckpointDir, config.TmpCheckpointDir, req.CheckpointHash)
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return nil, fmt.Errorf("failed to clean checkpoint staging directory: %w", err)
+	}
 	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create checkpoint directory: %w", err)
 	}
@@ -105,7 +108,7 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 	defer cuda.UnlockFromManifest(data, c.log)
 
 	// Phase 3: Capture — CRIU dump, /dev/shm, rootfs diff
-	criuDumpDuration, err := c.capture(criuOpts, data, state, tmpDir)
+	criuDumpDuration, err := c.capture(criuOpts, &spec.CRIU, data, state, tmpDir)
 	if err != nil {
 		return nil, err
 	}
@@ -218,11 +221,12 @@ func (c *Checkpointer) configure(
 
 func (c *Checkpointer) capture(
 	criuOpts *criurpc.CriuOpts,
+	criuSettings *config.CRIUSettings,
 	data *manifest.CheckpointManifest,
 	state *containerSnapshot,
 	checkpointDir string,
 ) (time.Duration, error) {
-	criuDumpDuration, err := criu.ExecuteDump(criuOpts, checkpointDir, c.log)
+	criuDumpDuration, err := criu.ExecuteDump(criuOpts, checkpointDir, criuSettings, c.log)
 	if err != nil {
 		return 0, err
 	}

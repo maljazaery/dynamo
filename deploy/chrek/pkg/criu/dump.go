@@ -2,6 +2,7 @@ package criu
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,12 +12,16 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
+	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 )
 
 // GenerateCRIUConfContent generates the criu.conf file content for options
 // that cannot be passed via RPC.
 func GenerateCRIUConfContent(c *config.CRIUSettings) string {
+	if c == nil {
+		return ""
+	}
 	var content string
 
 	if c.LibDir != "" {
@@ -80,14 +85,9 @@ func BuildDumpOptions(
 
 	// Cgroup management mode
 	criuOpts.ManageCgroups = proto.Bool(true)
-	cgMode := criurpc.CriuCgMode_IGNORE
-	switch strings.ToLower(strings.TrimSpace(settings.ManageCgroupsMode)) {
-	case "soft":
-		cgMode = criurpc.CriuCgMode_SOFT
-	case "full":
-		cgMode = criurpc.CriuCgMode_FULL
-	case "strict":
-		cgMode = criurpc.CriuCgMode_STRICT
+	cgMode, _, err := criuutil.ParseManageCgroupsMode(settings.ManageCgroupsMode)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cgroup mode: %w", err)
 	}
 	criuOpts.ManageCgroupsMode = &cgMode
 
@@ -136,9 +136,20 @@ func buildMountPolicy(mounts []inspect.MountInfo) (externalized, skipped []strin
 }
 
 // ExecuteDump runs the CRIU dump and logs timing plus dump-log location on failure.
-func ExecuteDump(criuOpts *criurpc.CriuOpts, checkpointDir string, log logr.Logger) (time.Duration, error) {
+func ExecuteDump(
+	criuOpts *criurpc.CriuOpts,
+	checkpointDir string,
+	settings *config.CRIUSettings,
+	log logr.Logger,
+) (time.Duration, error) {
 	criuDumpStart := time.Now()
 	criuClient := criulib.MakeCriu()
+	if settings != nil && strings.TrimSpace(settings.BinaryPath) != "" {
+		if _, err := os.Stat(settings.BinaryPath); err != nil {
+			return 0, fmt.Errorf("criu binary not found at %s: %w", settings.BinaryPath, err)
+		}
+		criuClient.SetCriuPath(settings.BinaryPath)
+	}
 	if err := criuClient.Dump(criuOpts, nil); err != nil {
 		dumpDuration := time.Since(criuDumpStart)
 		log.Error(err, "CRIU dump failed",

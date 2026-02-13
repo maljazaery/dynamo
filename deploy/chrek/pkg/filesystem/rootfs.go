@@ -83,7 +83,10 @@ func FindWhiteoutFiles(upperDir string) ([]string, error) {
 
 		name := info.Name()
 		if strings.HasPrefix(name, ".wh.") {
-			relPath, _ := filepath.Rel(upperDir, path)
+			relPath, err := filepath.Rel(upperDir, path)
+			if err != nil {
+				return fmt.Errorf("failed to compute relative path for %s: %w", path, err)
+			}
 			dir := filepath.Dir(relPath)
 			deletedFile := strings.TrimPrefix(name, ".wh.")
 			deletedPath := deletedFile
@@ -171,12 +174,25 @@ func ApplyDeletedFiles(checkpointPath, targetRoot string, log logr.Logger) error
 	}
 
 	count := 0
+	targetRootAbs, err := filepath.Abs(targetRoot)
+	if err != nil {
+		return fmt.Errorf("failed to resolve target root %s: %w", targetRoot, err)
+	}
+	targetRootPrefix := targetRootAbs + string(os.PathSeparator)
 	for _, f := range deletedFiles {
 		if f == "" {
 			continue
 		}
 		target := filepath.Join(targetRoot, f)
+		targetAbs, err := filepath.Abs(target)
+		if err != nil || (targetAbs != targetRootAbs && !strings.HasPrefix(targetAbs, targetRootPrefix)) {
+			log.V(1).Info("Skipping out-of-root deleted file entry", "entry", f)
+			continue
+		}
 		if _, err := os.Stat(target); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			log.V(1).Info("Could not stat deleted file target", "path", target, "error", err)
 			continue
 		}
 		if err := os.RemoveAll(target); err != nil {

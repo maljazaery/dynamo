@@ -1,4 +1,4 @@
-package criu
+package util
 
 import (
 	"fmt"
@@ -17,17 +17,11 @@ func LogRestoreErrors(checkpointPath, workDir string, log logr.Logger) {
 	candidates = append(candidates, filepath.Join(checkpointPath, "restore.log"))
 
 	for _, logPath := range candidates {
-		data, err := os.ReadFile(logPath)
-		if err != nil {
+		if _, err := os.Stat(logPath); err != nil {
 			continue
 		}
-		log.Info("=== CRIU RESTORE LOG ===")
-		for _, line := range strings.Split(string(data), "\n") {
-			if line != "" {
-				log.Info(line)
-			}
-		}
-		log.Info("=== END CRIU RESTORE LOG ===")
+		log.Info("CRIU restore log found", "path", logPath)
+		LogRestoreSummary(logPath, log)
 		return
 	}
 }

@@ -5,6 +5,7 @@ package watcher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,10 +112,18 @@ func (w *Watcher) Start(ctx context.Context) error {
 	ckptInformer := ckptFactory.Core().V1().Pods().Informer()
 	ckptInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			w.handleCheckpointPodEvent(ctx, obj.(*corev1.Pod))
+			pod, ok := podFromInformerObj(obj)
+			if !ok {
+				return
+			}
+			w.handleCheckpointPodEvent(ctx, pod)
 		},
 		UpdateFunc: func(_, newObj interface{}) {
-			w.handleCheckpointPodEvent(ctx, newObj.(*corev1.Pod))
+			pod, ok := podFromInformerObj(newObj)
+			if !ok {
+				return
+			}
+			w.handleCheckpointPodEvent(ctx, pod)
 		},
 	})
 	go ckptFactory.Start(w.stopCh)
@@ -138,10 +147,18 @@ func (w *Watcher) Start(ctx context.Context) error {
 	restoreInformer := restoreFactory.Core().V1().Pods().Informer()
 	restoreInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			w.handleRestorePodEvent(ctx, obj.(*corev1.Pod))
+			pod, ok := podFromInformerObj(obj)
+			if !ok {
+				return
+			}
+			w.handleRestorePodEvent(ctx, pod)
 		},
 		UpdateFunc: func(_, newObj interface{}) {
-			w.handleRestorePodEvent(ctx, newObj.(*corev1.Pod))
+			pod, ok := podFromInformerObj(newObj)
+			if !ok {
+				return
+			}
+			w.handleRestorePodEvent(ctx, pod)
 		},
 	})
 	go restoreFactory.Start(w.stopCh)
@@ -221,6 +238,7 @@ func (w *Watcher) handleRestorePodEvent(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 
+	// Restore failures require explicit intervention (new label/update) before retry.
 	if annotationStatus == "completed" || annotationStatus == "in_progress" || annotationStatus == "failed" {
 		return
 	}
@@ -297,7 +315,7 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		return
 	}
 
-	if err := w.sendSignalViaPIDNamespace(placeholderHostPID, result.RestoredPID, syscall.SIGUSR2, "restore complete"); err != nil {
+	if err := w.sendSignalViaPIDNamespace(ctx, placeholderHostPID, result.RestoredPID, syscall.SIGUSR2, "restore complete"); err != nil {
 		log.Error(err, "Failed to signal restored runtime process")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
 		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})
@@ -328,14 +346,18 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 	}
 
 	containerName := resolveMainContainerName(pod)
+	if containerName == "" {
+		err := fmt.Errorf("no containers found in pod spec")
+		log.Error(err, "Checkpoint failed")
+		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", err.Error())
+		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationCheckpointStatus: "failed"})
+		return
+	}
 
 	var containerID string
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == containerName {
-			containerID = cs.ContainerID
-			if len(containerID) > 13 && containerID[:13] == "containerd://" {
-				containerID = containerID[13:]
-			}
+			containerID = strings.TrimPrefix(cs.ContainerID, "containerd://")
 			break
 		}
 	}
@@ -409,7 +431,7 @@ func (w *Watcher) sendSignalToPID(pid int, sig syscall.Signal, reason string) er
 	return nil
 }
 
-func (w *Watcher) sendSignalViaPIDNamespace(referenceHostPID, targetNamespacePID int, sig syscall.Signal, reason string) error {
+func (w *Watcher) sendSignalViaPIDNamespace(ctx context.Context, referenceHostPID, targetNamespacePID int, sig syscall.Signal, reason string) error {
 	if referenceHostPID <= 0 {
 		return fmt.Errorf("invalid reference host PID %d for signal %d", referenceHostPID, int(sig))
 	}
@@ -417,7 +439,8 @@ func (w *Watcher) sendSignalViaPIDNamespace(referenceHostPID, targetNamespacePID
 		return fmt.Errorf("invalid namespace PID %d for signal %d", targetNamespacePID, int(sig))
 	}
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(
+		ctx,
 		"nsenter",
 		"-t", strconv.Itoa(referenceHostPID),
 		"-p",
@@ -497,19 +520,17 @@ func (w *Watcher) release(podKey string) {
 }
 
 func (w *Watcher) annotatePod(ctx context.Context, pod *corev1.Pod, annotations map[string]string) error {
-	patch := fmt.Sprintf(`{"metadata":{"annotations":{`)
-	first := true
-	for k, v := range annotations {
-		if !first {
-			patch += ","
-		}
-		patch += fmt.Sprintf("%q:%q", k, v)
-		first = false
+	patchBytes, err := json.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"annotations": annotations,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to build annotation patch payload: %w", err)
 	}
-	patch += `}}}`
 
-	_, err := w.clientset.CoreV1().Pods(pod.Namespace).Patch(
-		ctx, pod.Name, ktypes.MergePatchType, []byte(patch), metav1.PatchOptions{},
+	_, err = w.clientset.CoreV1().Pods(pod.Namespace).Patch(
+		ctx, pod.Name, ktypes.MergePatchType, patchBytes, metav1.PatchOptions{},
 	)
 	if err != nil {
 		w.log.Error(err, "Failed to annotate pod",
@@ -518,6 +539,18 @@ func (w *Watcher) annotatePod(ctx context.Context, pod *corev1.Pod, annotations 
 		)
 	}
 	return err
+}
+
+func podFromInformerObj(obj interface{}) (*corev1.Pod, bool) {
+	if pod, ok := obj.(*corev1.Pod); ok {
+		return pod, true
+	}
+	tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+	if !ok {
+		return nil, false
+	}
+	pod, ok := tombstone.Obj.(*corev1.Pod)
+	return pod, ok
 }
 
 func resolveMainContainerName(pod *corev1.Pod) string {

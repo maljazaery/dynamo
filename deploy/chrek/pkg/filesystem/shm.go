@@ -98,6 +98,7 @@ func RestoreDevShm(checkpointPath, targetRoot string, log logr.Logger) error {
 		return fmt.Errorf("failed to create target /dev/shm: %w", err)
 	}
 
+	restored := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -107,6 +108,7 @@ func RestoreDevShm(checkpointPath, targetRoot string, log logr.Logger) error {
 
 		info, err := entry.Info()
 		if err != nil {
+			log.Error(err, "Failed to get file info, skipping", "file", entry.Name())
 			continue
 		}
 		uid, gid := -1, -1
@@ -115,38 +117,18 @@ func RestoreDevShm(checkpointPath, targetRoot string, log logr.Logger) error {
 			gid = int(stat.Gid)
 		}
 
-		src, err := os.Open(srcPath)
-		if err != nil {
-			continue
-		}
-
 		mode := info.Mode()
 		if mode == 0 {
 			mode = 0666
 		}
-		dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-		if err != nil {
-			src.Close()
+		if err := copyFile(srcPath, destPath, mode, uid, gid); err != nil {
+			log.Error(err, "Failed to restore /dev/shm file, skipping", "file", entry.Name())
 			continue
 		}
-
-		if _, err := io.Copy(dst, src); err != nil {
-			src.Close()
-			dst.Close()
-			continue
-		}
-		if uid >= 0 && gid >= 0 {
-			if err := dst.Chown(uid, gid); err != nil {
-				src.Close()
-				dst.Close()
-				continue
-			}
-		}
-		src.Close()
-		dst.Close()
+		restored++
 	}
 
-	log.V(1).Info("Restored /dev/shm files", "count", len(entries))
+	log.V(1).Info("Restored /dev/shm files", "count", restored)
 	return nil
 }
 

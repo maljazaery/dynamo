@@ -52,7 +52,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 		return 0, 0, fmt.Errorf("failed to read manifest: %w", err)
 	}
 	settings := m.CRIUDump.CRIU
-	manageCgroupsMode, manageCgroupsModeName, err := parseManageCgroupsMode(settings.ManageCgroupsMode)
+	manageCgroupsMode, manageCgroupsModeName, err := criuutil.ParseManageCgroupsMode(settings.ManageCgroupsMode)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -240,27 +240,11 @@ func buildRestoreConfigFile(checkpointPath, workDir string, cgMode criurpc.CriuC
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	if err := os.WriteFile(restoreConfPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(restoreConfPath, []byte(content), 0600); err != nil {
 		return "", err
 	}
 	log.Info("Wrote restore-specific CRIU config", "path", restoreConfPath)
 	return restoreConfPath, nil
-}
-
-func parseManageCgroupsMode(raw string) (criurpc.CriuCgMode, string, error) {
-	mode := strings.ToLower(strings.TrimSpace(raw))
-	switch mode {
-	case "", "ignore":
-		return criurpc.CriuCgMode_IGNORE, "ignore", nil
-	case "soft":
-		return criurpc.CriuCgMode_SOFT, mode, nil
-	case "full":
-		return criurpc.CriuCgMode_FULL, mode, nil
-	case "strict":
-		return criurpc.CriuCgMode_STRICT, mode, nil
-	default:
-		return criurpc.CriuCgMode_IGNORE, "", fmt.Errorf("invalid manageCgroupsMode %q in checkpoint manifest", raw)
-	}
 }
 
 func logCgroupContext(log logr.Logger) {

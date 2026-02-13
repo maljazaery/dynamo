@@ -1,6 +1,5 @@
-// Package criu provides CRIU dump and restore operations, configuration
-// generation, and FD management for go-criu integration.
-package criu
+// Package util provides shared helpers for chrek CRIU orchestration.
+package util
 
 import (
 	"fmt"

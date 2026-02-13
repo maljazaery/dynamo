@@ -66,7 +66,22 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		"container", req.ContainerName,
 	)
 
+	if err := validateCheckpointHash(req.CheckpointHash); err != nil {
+		return nil, err
+	}
 	checkpointPath := filepath.Join(r.cfg.CheckpointBasePath, req.CheckpointHash)
+	baseAbs, err := filepath.Abs(r.cfg.CheckpointBasePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve checkpoint base path: %w", err)
+	}
+	checkpointAbs, err := filepath.Abs(checkpointPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve checkpoint path: %w", err)
+	}
+	basePrefix := baseAbs + string(os.PathSeparator)
+	if checkpointAbs != baseAbs && !strings.HasPrefix(checkpointAbs, basePrefix) {
+		return nil, fmt.Errorf("invalid checkpoint hash %q", req.CheckpointHash)
+	}
 
 	m, err := manifest.Read(checkpointPath)
 	if err != nil {
@@ -240,6 +255,23 @@ func validateProcessState(procRoot string, pid int) error {
 	}
 
 	return fmt.Errorf("state not found in %s", statusPath)
+}
+
+func validateCheckpointHash(checkpointHash string) error {
+	hash := strings.TrimSpace(checkpointHash)
+	if hash == "" {
+		return fmt.Errorf("checkpoint hash is required")
+	}
+	if strings.Contains(hash, "/") || strings.Contains(hash, "\\") {
+		return fmt.Errorf("invalid checkpoint hash %q", checkpointHash)
+	}
+	if strings.Contains(hash, "..") {
+		return fmt.Errorf("invalid checkpoint hash %q", checkpointHash)
+	}
+	if filepath.Clean(hash) != hash {
+		return fmt.Errorf("invalid checkpoint hash %q", checkpointHash)
+	}
+	return nil
 }
 
 func logProcessDiagnostics(procRoot string, pid int, restoreLogPath string, log logr.Logger) {

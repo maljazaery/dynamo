@@ -201,6 +201,14 @@ pub struct AgentHints {
     #[builder(default, setter(strip_option))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub osl: Option<u32>,
+
+    /// When true, the router will pin the prefix blocks on the selected worker
+    /// after generation completes. This protects the cached prefix from eviction
+    /// for subsequent requests with the same prefix (e.g., system prompt reuse
+    /// in agentic workflows).
+    #[builder(default, setter(strip_option))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<bool>,
 }
 
 impl Default for NvExt {
@@ -250,6 +258,7 @@ mod tests {
         assert_eq!(nv_ext.prefill_worker_id, None);
         assert_eq!(nv_ext.decode_worker_id, None);
         assert_eq!(nv_ext.enable_local_updates, None);
+        assert_eq!(nv_ext.expected_output_tokens, None);
     }
 
     // Test valid builder configurations

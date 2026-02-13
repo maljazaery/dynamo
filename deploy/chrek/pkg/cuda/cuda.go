@@ -47,6 +47,14 @@ func PrepareCheckpoint(ctx context.Context, req CheckpointRequest, sourcePID int
 		return nil
 	}
 
+	sourceGPUUUIDs, err := inspect.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, req.ContainerName, log)
+	if err != nil {
+		return fmt.Errorf("failed to discover source GPU UUIDs: %w", err)
+	}
+	if len(sourceGPUUUIDs) == 0 {
+		return fmt.Errorf("no source GPU UUIDs found for %s/%s container %s", req.PodNamespace, req.PodName, req.ContainerName)
+	}
+
 	locked := make([]int, 0, len(cudaPIDs))
 	for _, pid := range cudaPIDs {
 		if err := Lock(ctx, pid, log); err != nil {
@@ -63,14 +71,6 @@ func PrepareCheckpoint(ctx context.Context, req CheckpointRequest, sourcePID int
 		}
 	}
 
-	sourceGPUUUIDs, err := inspect.GetPodGPUUUIDsWithRetry(ctx, req.PodName, req.PodNamespace, req.ContainerName, log)
-	if err != nil {
-		return fmt.Errorf("failed to discover source GPU UUIDs: %w", err)
-	}
-	if len(sourceGPUUUIDs) == 0 {
-		UnlockProcesses(context.Background(), locked, log)
-		return fmt.Errorf("no source GPU UUIDs found for %s/%s container %s", req.PodNamespace, req.PodName, req.ContainerName)
-	}
 	m.CUDA = manifest.NewCUDAManifest(cudaPIDs, sourceGPUUUIDs)
 
 	log.Info("Prepared external CUDA checkpoint metadata",

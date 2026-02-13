@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -33,7 +34,7 @@ func LoadConfig(path string) (*config.AgentConfig, error) {
 func LoadConfigOrDefault(path string) (*config.AgentConfig, error) {
 	cfg, err := LoadConfig(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			cfg = &config.AgentConfig{}
 			cfg.LoadEnvOverrides()
 			return cfg, nil

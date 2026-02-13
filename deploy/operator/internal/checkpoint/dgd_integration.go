@@ -339,8 +339,7 @@ func InjectPodInfoVolumeMount(container *corev1.Container) {
 // Modifications applied:
 //  1. Security context - seccomp profile (io_uring blocking, matches checkpoint environment)
 //  2. Environment variables - checkpoint path and hash
-//  3. Storage configuration - checkpoint PVC, signal volume (mount namespace consistency),
-//     Downward API (pod identity)
+//  3. Storage configuration - checkpoint PVC and Downward API (pod identity)
 //
 // No hostIPC, no privileged mode — those are only needed when CRIU runs inside the
 // container. With external restore, all privilege lives in the DaemonSet.

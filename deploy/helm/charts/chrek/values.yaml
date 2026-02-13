@@ -70,7 +70,7 @@ daemonset:
 
   # Node selector - target GPU nodes
   nodeSelector:
-    nvidia.com/gpu.present: true
+    nvidia.com/gpu.present: "true"
 
   # Tolerations for GPU nodes
   tolerations:

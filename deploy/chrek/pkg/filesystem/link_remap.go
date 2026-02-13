@@ -11,6 +11,8 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu"
 )
 
+const linkRemapStubSizeBytes = 32
+
 // CreateLinkRemapStubs creates placeholder files for CRIU link_remap entries.
 // These stubs must exist in the target rootfs before CRIU restore.
 func CreateLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) error {
@@ -39,6 +41,8 @@ func CreateLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) er
 	}
 
 	created := 0
+	cleanRoot := filepath.Clean(targetRoot)
+	rootPrefix := cleanRoot + string(os.PathSeparator)
 	for _, remap := range remaps {
 		origInfo, ok := fileMap[remap.OrigID]
 		if !ok {
@@ -62,8 +66,15 @@ func CreateLinkRemapStubs(checkpointPath, targetRoot string, log logr.Logger) er
 			remapPathInContainer = "/" + remapPathInContainer
 		}
 
-		hostPath := filepath.Join(targetRoot, strings.TrimPrefix(filepath.Clean(remapPathInContainer), "/"))
+		hostPath := filepath.Join(cleanRoot, strings.TrimPrefix(filepath.Clean(remapPathInContainer), "/"))
+		if hostPath != cleanRoot && !strings.HasPrefix(hostPath, rootPrefix) {
+			log.Error(nil, "Skipping link_remap stub outside target root", "path", hostPath, "target_root", cleanRoot)
+			continue
+		}
 		if _, err := os.Stat(hostPath); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			log.Error(err, "Failed to stat link_remap stub path", "path", hostPath)
 			continue
 		}
 
@@ -89,6 +100,7 @@ func createStub(path string, mode os.FileMode) error {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(make([]byte, 32))
+	// CRIU link_remap expects a non-empty file at restore time.
+	_, err = f.Write(make([]byte, linkRemapStubSizeBytes))
 	return err
 }

@@ -22,7 +22,7 @@ func ConfigureLogger(output string) logr.Logger {
 	}
 
 	zapLevel := zapcore.InfoLevel
-	parseErr := error(nil)
+	var parseErr error
 	switch level {
 	case "trace", "debug":
 		zapLevel = zapcore.DebugLevel

@@ -76,6 +76,13 @@ func main() {
 	case <-sigChan:
 		agentLog.Info("Shutting down")
 		cancel()
+		select {
+		case err := <-watcherDone:
+			if err != nil {
+				agentLog.Error(err, "Pod watcher exited with error during shutdown")
+			}
+		default:
+		}
 	case err := <-watcherDone:
 		if err != nil {
 			fatal(agentLog, err, "Pod watcher exited with error")

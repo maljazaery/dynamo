@@ -1286,6 +1286,9 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 		maps.Copy(podAnnotations, extraPodMetadata.Annotations)
 		maps.Copy(podLabels, extraPodMetadata.Labels)
 	}
+	// Restore labels are operator-controlled. Clear any stale/user-provided
+	// value after metadata merge; the controller re-adds it only when the
+	// checkpoint contract below is satisfied.
 	delete(podLabels, commonconsts.KubeLabelIsRestoreTarget)
 
 	// Explicit restore orchestration contract:

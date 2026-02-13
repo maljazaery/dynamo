@@ -71,7 +71,7 @@ daemonset:
 
   # Node selector - target GPU nodes
   nodeSelector:
-    nvidia.com/gpu.present: "true"
+    nvidia.com/gpu.present: true
 
   # Tolerations for GPU nodes
   tolerations:
@@ -130,7 +130,7 @@ config:
       # CRIU logging verbosity (0-4)
       logLevel: 4
       # CRIU work directory for temporary files
-      workDir: "/var/criu-work"
+      workDir: /var/criu-work
 
       # K8s-specific options (recommended defaults for containers)
       leaveRunning: true      # Keep process running after checkpoint
@@ -141,11 +141,11 @@ config:
       extUnixSk: true         # External Unix sockets
       linkRemap: true         # Handle deleted-but-open files
       extMasters: true        # External bind mount masters
-      manageCgroupsMode: "soft"      # CRIU cgroup management mode (ignore/soft/full/strict)
+      manageCgroupsMode: soft      # CRIU cgroup management mode (fixed: soft)
 
       # Restore-specific options (only apply during CRIU restore, not dump)
       rstSibling: true         # Restore as sibling process (required for go-criu swrk mode)
-      mntnsCompatMode: true    # Mount namespace compatibility mode
+      mntnsCompatMode: false   # Mount namespace compatibility mode
       evasiveDevices: true     # Use any device path if original is inaccessible
       forceIrmap: true         # Force resolving inotify/fsnotify watch names
 
@@ -162,13 +162,13 @@ config:
       # System directories excluded from rootfs diff capture
       # These are injected by NVIDIA GPU Operator and cause conflicts during restore
       systemDirs:
-        - "./usr"
-        - "./etc"
-        - "./opt"
-        - "./var"
-        - "./run"
+        - ./usr
+        - ./etc
+        - ./opt
+        - ./var
+        - ./run
       # Cache directories to exclude (reduces checkpoint size)
       cacheDirs:
-        - "./.cache/huggingface"
+        - ./.cache/huggingface
       # Additional custom exclusions (application-specific)
       additionalExclusions: []

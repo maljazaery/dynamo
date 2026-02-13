@@ -8,7 +8,6 @@ import (
 	criulib "github.com/checkpoint-restore/go-criu/v8"
 	criurpc "github.com/checkpoint-restore/go-criu/v8/rpc"
 	"github.com/go-logr/logr"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
@@ -33,25 +32,23 @@ func GenerateCRIUConfContent(c *config.CRIUSettings) string {
 	return content
 }
 
-// BuildDumpOptions creates CRIU options directly from spec settings and runtime state.
+// BuildDumpOptions creates CRIU options from spec settings and classified mounts.
 func BuildDumpOptions(
 	settings *config.CRIUSettings,
 	pid int,
 	imageDirFD int32,
 	rootFS string,
-	mountInfo []inspect.MountInfo,
-	ociSpec *specs.Spec,
+	mounts []inspect.MountInfo,
 	namespaces map[inspect.NamespaceType]*inspect.NamespaceInfo,
 	log logr.Logger,
 ) (*criurpc.CriuOpts, error) {
-	mountPolicy := inspect.BuildMountPolicy(mountInfo, ociSpec, rootFS)
+	externalized, skipped := buildMountPolicy(mounts)
 
-	extMnt := buildExternalMountMaps(mountPolicy.Externalized)
-	skipMnt := mountPolicy.Skipped
+	extMnt := buildExternalMountMaps(externalized)
 	external := buildExternalNamespaces(namespaces, log)
 	log.V(1).Info("Resolved mount policy for CRIU dump",
-		"externalized_count", len(mountPolicy.Externalized),
-		"skipped_count", len(mountPolicy.Skipped),
+		"externalized_count", len(externalized),
+		"skipped_count", len(skipped),
 	)
 
 	criuOpts := &criurpc.CriuOpts{
@@ -62,7 +59,7 @@ func BuildDumpOptions(
 	}
 	criuOpts.ExtMnt = extMnt
 	criuOpts.External = external
-	criuOpts.SkipMnt = skipMnt
+	criuOpts.SkipMnt = skipped
 
 	if settings == nil {
 		return criuOpts, nil
@@ -99,6 +96,43 @@ func BuildDumpOptions(
 	}
 
 	return criuOpts, nil
+}
+
+// buildMountPolicy classifies mounts into CRIU extMnt and skipMnt lists.
+// Mounts must already have IsOCIManaged and IsRunRuntimeMount set by inspect.ClassifyMounts.
+//
+// Rule order and precedence (top to bottom):
+//  1. Skip non-OCI proc/sys submounts and non-OCI runtime /run submounts.
+//  2. Externalize everything else.
+//
+// Precedence: skip > externalize.
+//
+// Skip: non-OCI /proc, /sys submounts and non-OCI runtime /run submounts.
+// Externalize: everything else.
+func buildMountPolicy(mounts []inspect.MountInfo) (externalized, skipped []string) {
+	extSet := make(map[string]struct{}, len(mounts))
+	skipSet := make(map[string]struct{}, len(mounts))
+
+	for _, m := range mounts {
+		if m.MountPoint == "" {
+			continue
+		}
+		if !m.IsOCIManaged && (strings.HasPrefix(m.MountPoint, "/proc/") || strings.HasPrefix(m.MountPoint, "/sys/") || m.IsRunRuntimeMount) {
+			skipSet[m.MountPoint] = struct{}{}
+			continue
+		}
+		extSet[m.MountPoint] = struct{}{}
+	}
+
+	externalized = make([]string, 0, len(extSet))
+	for p := range extSet {
+		externalized = append(externalized, p)
+	}
+	skipped = make([]string, 0, len(skipSet))
+	for p := range skipSet {
+		skipped = append(skipped, p)
+	}
+	return externalized, skipped
 }
 
 // ExecuteDump runs the CRIU dump and logs timing plus dump-log location on failure.

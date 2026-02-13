@@ -2,8 +2,36 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
+
+// AgentConfig holds the full agent configuration: static checkpoint settings
+// from the ConfigMap YAML, plus runtime fields from environment variables.
+type AgentConfig struct {
+	// NodeName is the Kubernetes node name (from NODE_NAME env, downward API)
+	NodeName string `yaml:"-"`
+
+	// RestrictedNamespace restricts pod watching to this namespace (optional)
+	RestrictedNamespace string `yaml:"-"`
+
+	Checkpoint CheckpointSpec `yaml:"checkpoint"`
+}
+
+// LoadEnvOverrides applies environment variable overrides to the AgentConfig.
+func (c *AgentConfig) LoadEnvOverrides() {
+	if v := os.Getenv("NODE_NAME"); v != "" {
+		c.NodeName = v
+	}
+	if v := os.Getenv("RESTRICTED_NAMESPACE"); v != "" {
+		c.RestrictedNamespace = v
+	}
+}
+
+// Validate checks that the configuration has valid values.
+func (c *AgentConfig) Validate() error {
+	return c.Checkpoint.Validate()
+}
 
 // CheckpointSpec is the static checkpoint spec loaded from ConfigMap YAML.
 type CheckpointSpec struct {

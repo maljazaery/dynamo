@@ -54,17 +54,12 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	agentLog.Info("Starting chrek agent",
-		"node", cfg.Agent.NodeName,
+		"node", cfg.NodeName,
 		"checkpoint_dir", cfg.Checkpoint.BasePath,
-		"watch_namespace", cfg.Agent.RestrictedNamespace,
+		"watch_namespace", cfg.RestrictedNamespace,
 	)
 
-	watcherCfg := watcher.Config{
-		NodeName:            cfg.Agent.NodeName,
-		RestrictedNamespace: cfg.Agent.RestrictedNamespace,
-		CheckpointSpec:      &cfg.Checkpoint,
-	}
-	podWatcher, err := watcher.NewWatcher(watcherCfg, checkpointer, restorer, discoveryClient, rootLog.WithName("watcher"))
+	podWatcher, err := watcher.NewWatcher(cfg, checkpointer, restorer, discoveryClient, rootLog.WithName("watcher"))
 	if err != nil {
 		fatal(agentLog, err, "Failed to create pod watcher")
 	}

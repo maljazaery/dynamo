@@ -65,8 +65,8 @@ See `values.yaml` for all configuration options.
 | `storage.pvc.storageClass` | Storage class name | `""` (default) |
 | `daemonset.image.repository` | DaemonSet image repository | `nvidia/chrek-agent` |
 | `daemonset.nodeSelector` | Node selector for GPU nodes | `nvidia.com/gpu.present: "true"` |
-| `daemonset.criu.timeout` | CRIU timeout in seconds | `"21600"` (6 hours) |
-| `daemonset.criu.ghostLimit` | CRIU ghost file size limit | `"512MB"` |
+| `config.checkpoint.criu.ghostLimit` | CRIU ghost file size limit in bytes | `536870912` (512MB) |
+| `config.checkpoint.criu.logLevel` | CRIU logging verbosity (0-4) | `4` |
 | `rbac.namespaceRestricted` | Use namespace-scoped RBAC | `true` |
 
 ## Usage

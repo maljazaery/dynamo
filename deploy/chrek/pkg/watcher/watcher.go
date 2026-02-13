@@ -30,16 +30,9 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
 )
 
-// Config holds watcher configuration.
-type Config struct {
-	NodeName            string
-	RestrictedNamespace string
-	CheckpointSpec      *config.CheckpointSpec
-}
-
 // Watcher watches for pods with checkpoint/restore labels and triggers operations.
 type Watcher struct {
-	config          Config
+	config          *config.AgentConfig
 	clientset       kubernetes.Interface
 	checkpointer    *orchestrate.Checkpointer
 	restorer        *orchestrate.Restorer
@@ -54,7 +47,7 @@ type Watcher struct {
 
 // NewWatcher creates a new pod watcher.
 func NewWatcher(
-	cfg Config,
+	cfg *config.AgentConfig,
 	checkpointer *orchestrate.Checkpointer,
 	restorer *orchestrate.Restorer,
 	discoveryClient *inspect.Client,
@@ -84,10 +77,6 @@ func NewWatcher(
 
 // Start begins watching for pods and processing checkpoint/restore events.
 func (w *Watcher) Start(ctx context.Context) error {
-	if w.config.CheckpointSpec == nil {
-		return fmt.Errorf("checkpoint spec is required")
-	}
-
 	w.log.Info("Starting pod watcher",
 		"node", w.config.NodeName,
 		"checkpoint", config.KubeLabelIsCheckpointSource,
@@ -168,11 +157,6 @@ func (w *Watcher) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the watcher.
-func (w *Watcher) Stop() {
-	close(w.stopCh)
-}
-
 func (w *Watcher) handleCheckpointPodEvent(ctx context.Context, pod *corev1.Pod) {
 	if pod.Spec.NodeName != w.config.NodeName {
 		return
@@ -247,7 +231,7 @@ func (w *Watcher) handleRestorePodEvent(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 
-	checkpointDir := filepath.Join(w.config.CheckpointSpec.BasePath, checkpointHash)
+	checkpointDir := filepath.Join(w.config.Checkpoint.BasePath, checkpointHash)
 	if _, err := os.Stat(checkpointDir); os.IsNotExist(err) {
 		w.log.V(1).Info("Checkpoint not ready on disk, skipping restore", "pod", podKey, "checkpoint_hash", checkpointHash)
 		return
@@ -377,13 +361,13 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		ContainerID:    containerID,
 		ContainerName:  containerName,
 		CheckpointHash: checkpointHash,
-		CheckpointDir:  w.config.CheckpointSpec.BasePath,
+		CheckpointDir:  w.config.Checkpoint.BasePath,
 		NodeName:       w.config.NodeName,
 		PodName:        pod.Name,
 		PodNamespace:   pod.Namespace,
 	}
 
-	result, err := w.checkpointer.Checkpoint(ctx, req, w.config.CheckpointSpec)
+	result, err := w.checkpointer.Checkpoint(ctx, req, &w.config.Checkpoint)
 	if err != nil {
 		log.Error(err, "Checkpoint failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "CheckpointFailed", err.Error())
@@ -394,10 +378,10 @@ func (w *Watcher) doCheckpoint(ctx context.Context, pod *corev1.Pod, checkpointH
 		return
 	}
 
-	checkpointPath := filepath.Join(w.config.CheckpointSpec.BasePath, checkpointHash)
+	checkpointPath := filepath.Join(w.config.Checkpoint.BasePath, checkpointHash)
 	if result != nil && result.CheckpointHash != "" {
 		checkpointHash = result.CheckpointHash
-		checkpointPath = filepath.Join(w.config.CheckpointSpec.BasePath, result.CheckpointHash)
+		checkpointPath = filepath.Join(w.config.Checkpoint.BasePath, result.CheckpointHash)
 	}
 
 	log.Info("Checkpoint completed successfully", "checkpoint_dir", checkpointPath)

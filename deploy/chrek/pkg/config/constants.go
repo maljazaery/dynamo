@@ -41,9 +41,6 @@ const (
 	// CheckpointManifestFilename is the name of the manifest file in checkpoint directories.
 	CheckpointManifestFilename = "manifest.yaml"
 
-	// DescriptorsFilename is the name of the file descriptors file.
-	DescriptorsFilename = "descriptors.yaml"
-
 	// RootfsDiffFilename is the name of the rootfs diff tar in checkpoint directories.
 	RootfsDiffFilename = "rootfs-diff.tar"
 

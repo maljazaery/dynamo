@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -43,67 +42,3 @@ func Read(checkpointDir string) (*CheckpointManifest, error) {
 	return &data, nil
 }
 
-// SaveDescriptors writes file descriptor information to the checkpoint directory.
-func SaveDescriptors(checkpointDir string, descriptors []string) error {
-	content, err := yaml.Marshal(descriptors)
-	if err != nil {
-		return fmt.Errorf("failed to marshal descriptors: %w", err)
-	}
-
-	descriptorsPath := filepath.Join(checkpointDir, config.DescriptorsFilename)
-	if err := os.WriteFile(descriptorsPath, content, 0600); err != nil {
-		return fmt.Errorf("failed to write descriptors file: %w", err)
-	}
-
-	return nil
-}
-
-// LoadDescriptors reads file descriptor information from checkpoint directory.
-func LoadDescriptors(checkpointDir string) ([]string, error) {
-	descriptorsPath := filepath.Join(checkpointDir, config.DescriptorsFilename)
-
-	content, err := os.ReadFile(descriptorsPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read descriptors file: %w", err)
-	}
-
-	var descriptors []string
-	if err := yaml.Unmarshal(content, &descriptors); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal descriptors: %w", err)
-	}
-
-	return descriptors, nil
-}
-
-// ListCheckpoints returns all completed checkpoint IDs in the base directory.
-func ListCheckpoints(baseDir string) ([]string, error) {
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read checkpoint directory: %w", err)
-	}
-
-	var checkpoints []string
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == config.TmpCheckpointDir {
-			continue
-		}
-
-		manifestPath := filepath.Join(baseDir, entry.Name(), config.CheckpointManifestFilename)
-		if _, err := os.Stat(manifestPath); err == nil {
-			checkpoints = append(checkpoints, entry.Name())
-		}
-	}
-
-	return checkpoints, nil
-}
-
-// DeleteCheckpoint removes a checkpoint directory.
-func DeleteCheckpoint(baseDir, checkpointHash string) error {
-	checkpointDir := filepath.Join(baseDir, checkpointHash)
-	absBase, _ := filepath.Abs(baseDir)
-	absDir, _ := filepath.Abs(checkpointDir)
-	if !strings.HasPrefix(absDir, absBase+string(filepath.Separator)) && absDir != absBase {
-		return fmt.Errorf("invalid checkpoint ID: resolved path %s is outside base directory %s", absDir, absBase)
-	}
-	return os.RemoveAll(checkpointDir)
-}

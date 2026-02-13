@@ -57,10 +57,6 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes.
 build: fmt vet ## Build chrek-agent binary.
 	CGO_ENABLED=0 go build -ldflags="-w -s" -o bin/chrek-agent ./cmd/agent
 
-.PHONY: build-agent
-build-agent: fmt vet ## Build chrek-agent binary only.
-	CGO_ENABLED=0 go build -ldflags="-w -s" -o bin/chrek-agent ./cmd/agent
-
 .PHONY: run
 run: build ## Run chrek-agent from your host.
 	./bin/chrek-agent

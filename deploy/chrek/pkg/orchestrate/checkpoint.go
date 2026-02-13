@@ -48,7 +48,7 @@ type containerSnapshot struct {
 	RootFS     string
 	UpperDir   string
 	OCISpec    *specs.Spec
-	MountInfo  []inspect.MountInfo
+	Mounts     []inspect.MountInfo
 	Namespaces map[inspect.NamespaceType]*inspect.NamespaceInfo
 }
 
@@ -146,6 +146,7 @@ func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*con
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse mountinfo: %w", err)
 	}
+	mounts := inspect.ClassifyMounts(mountInfo, ociSpec, rootFS)
 	namespaces, err := inspect.GetAllNamespaces(pid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get namespaces: %w", err)
@@ -156,7 +157,7 @@ func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*con
 		RootFS:     rootFS,
 		UpperDir:   upperDir,
 		OCISpec:    ociSpec,
-		MountInfo:  mountInfo,
+		Mounts:     mounts,
 		Namespaces: namespaces,
 	}, nil
 }
@@ -174,8 +175,7 @@ func (c *Checkpointer) configure(
 		state.PID,
 		imageDirFD,
 		state.RootFS,
-		state.MountInfo,
-		state.OCISpec,
+		state.Mounts,
 		state.Namespaces,
 		c.log,
 	)

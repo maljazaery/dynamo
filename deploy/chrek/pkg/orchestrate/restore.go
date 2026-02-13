@@ -7,11 +7,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/go-logr/logr"
-	"golang.org/x/sys/unix"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
@@ -132,9 +130,6 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		r.log.Error(err, "Failed to restore /dev/shm")
 	}
 
-	// Step 2.5: Ensure /dev/net/tun exists in placeholder rootfs
-	ensureDevNetTun(targetRoot, r.log)
-
 	// Step 3: Create link_remap stubs
 	if err := filesystem.CreateLinkRemapStubs(checkpointPath, targetRoot, r.log); err != nil {
 		r.log.Error(err, "Failed to create link_remap stubs")
@@ -172,23 +167,6 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		RestoredHostPID: restoredHostPID,
 		CompletedSteps:  completedSteps,
 	}, nil
-}
-
-// ensureDevNetTun creates /dev/net/tun in the placeholder rootfs if missing.
-func ensureDevNetTun(targetRoot string, log logr.Logger) {
-	tunPath := filepath.Join(targetRoot, "dev/net/tun")
-	if _, statErr := os.Stat(tunPath); !os.IsNotExist(statErr) {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(tunPath), 0755); err != nil {
-		log.Error(err, "Failed to create /dev/net dir in placeholder")
-		return
-	}
-	if err := syscall.Mknod(tunPath, syscall.S_IFCHR|0666, int(unix.Mkdev(10, 200))); err != nil {
-		log.Error(err, "Failed to create /dev/net/tun in placeholder")
-		return
-	}
-	log.Info("Created /dev/net/tun in placeholder rootfs")
 }
 
 func resolveCgroupRootFromHostPID(pid int) (string, error) {

@@ -63,11 +63,10 @@ daemonset:
   # Resource limits and requests
   resources:
     limits:
-      cpu: 2
-      memory: 16Gi
+      memory: 4Gi
     requests:
-      cpu: 500m
-      memory: 2Gi
+      cpu: 2
+      memory: 1Gi
 
   # Node selector - target GPU nodes
   nodeSelector:

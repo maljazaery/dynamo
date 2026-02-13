@@ -126,8 +126,8 @@ func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID in
 			if err := RestoreProcesses(ctx, cudaPIDs, deviceMap, log); err != nil {
 				return err
 			}
-			log.Info("Running cuda-checkpoint unlock for candidate CUDA PIDs", "cuda_pids", len(cudaPIDs))
-			UnlockProcesses(ctx, cudaPIDs, log)
+			log.Info("Running cuda-checkpoint unlock for candidate CUDA PIDs after restore", "cuda_pids", len(cudaPIDs))
+			UnlockProcesses(context.Background(), cudaPIDs, log)
 			log.Info("CUDA restore completed", "cuda_pids", len(cudaPIDs), "device_map", deviceMap)
 			return nil
 		}

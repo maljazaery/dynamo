@@ -43,7 +43,7 @@ func getCgroupPIDs(cgroupPath string) ([]int, error) {
 }
 
 // ProcessTreePIDs walks the process tree rooted at rootPID and returns all PIDs.
-// Used by ns-restore-runner for in-namespace CUDA PID discovery.
+// Used by nsrestore for in-namespace CUDA PID discovery.
 func ProcessTreePIDs(rootPID int) []int {
 	if rootPID <= 0 {
 		return nil

@@ -18,6 +18,7 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu"
+	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/filesystem"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
@@ -86,7 +87,7 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 	}
 
 	// Open image directory FD for CRIU
-	imageDir, imageDirFD, err := criu.OpenPathForCRIU(tmpDir)
+	imageDir, imageDirFD, err := criuutil.OpenPathForCRIU(tmpDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open image directory: %w", err)
 	}

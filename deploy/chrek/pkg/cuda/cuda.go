@@ -1,6 +1,6 @@
 // Package cuda provides CUDA checkpoint and restore operations using
 // the external cuda-checkpoint binary. Both DaemonSet-side (cgroup-based)
-// and ns-restore-runner-side (process-tree-based) operations are included.
+// and nsrestore-side (process-tree-based) operations are included.
 package cuda
 
 import (
@@ -91,7 +91,7 @@ func UnlockFromManifest(m *manifest.CheckpointManifest, log logr.Logger) {
 }
 
 // Restore performs CUDA restore from inside the container namespace
-// (called by ns-restore-runner). Uses process tree walking instead of cgroup discovery.
+// (called by nsrestore). Uses process tree walking instead of cgroup discovery.
 func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID int, deviceMap string, log logr.Logger) error {
 	if m.CUDA.IsEmpty() {
 		log.Info("Checkpoint does not contain CUDA metadata, skipping cuda-checkpoint restore")

@@ -17,8 +17,11 @@ data:
     checkpoint:
       # Base path for checkpoint directories (shared PVC mount path)
       basePath: {{ .Values.storage.pvc.basePath | quote }}
+      # Path to the nsrestore binary in the placeholder image
+      nsRestorePath: {{ .Values.config.checkpoint.nsRestorePath | quote }}
 
       criu:
+        binaryPath: {{ .Values.config.checkpoint.criu.binaryPath | quote }}
         # RPC options
         ghostLimit: {{ .Values.config.checkpoint.criu.ghostLimit }}
         logLevel: {{ .Values.config.checkpoint.criu.logLevel }}

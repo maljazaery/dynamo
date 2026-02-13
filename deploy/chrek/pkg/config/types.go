@@ -10,6 +10,9 @@ type CheckpointSpec struct {
 	// BasePath is the base directory for checkpoint storage (PVC mount point).
 	BasePath string `yaml:"basePath"`
 
+	// NSRestorePath is the path to the nsrestore binary in the placeholder image.
+	NSRestorePath string `yaml:"nsRestorePath"`
+
 	// CRIU options for dump and restore operations
 	CRIU CRIUSettings `yaml:"criu"`
 
@@ -19,6 +22,9 @@ type CheckpointSpec struct {
 
 // Validate checks that the CheckpointSpec has valid values.
 func (c *CheckpointSpec) Validate() error {
+	if c.NSRestorePath == "" {
+		return &ConfigError{Field: "nsRestorePath", Message: "nsRestorePath is required"}
+	}
 	return c.RootfsExclusions.Validate()
 }
 
@@ -74,8 +80,8 @@ type CRIUSettings struct {
 	ManageCgroupsMode string `yaml:"manageCgroupsMode"`
 
 	// === Restore-specific RPC Options ===
-	// These only apply during CRIU restore (not dump). They are passed from the
-	// ConfigMap to ns-restore-runner via CLI flags at restore time.
+	// These only apply during CRIU restore (not dump). They are persisted into
+	// the checkpoint manifest at dump time and read by nsrestore at restore time.
 
 	// RstSibling restores the process as a sibling (required for swrk/go-criu restore).
 	RstSibling bool `yaml:"rstSibling"`
@@ -89,7 +95,10 @@ type CRIUSettings struct {
 	// ForceIrmap forces resolving names for inotify/fsnotify watches during restore.
 	ForceIrmap bool `yaml:"forceIrmap"`
 
-	// === CRIU Conf File Options (NOT available via RPC - written to criu.conf) ===
+	// === CRIU Binary and Conf File Options ===
+
+	// BinaryPath is the path to the criu binary.
+	BinaryPath string `yaml:"binaryPath"`
 
 	// LibDir is the path to CRIU plugin directory (e.g., /usr/local/lib/criu).
 	// Required for CUDA checkpoint/restore.

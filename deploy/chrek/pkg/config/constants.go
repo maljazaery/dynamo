@@ -49,4 +49,7 @@ const (
 
 	// DeletedFilesFilename is the name of the deleted files JSON in checkpoint directories.
 	DeletedFilesFilename = "deleted-files.json"
+
+	// RestoreLogFilename is the CRIU restore log filename.
+	RestoreLogFilename = "restore.log"
 )

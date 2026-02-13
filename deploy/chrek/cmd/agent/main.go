@@ -5,25 +5,21 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/go-logr/logr"
-	"github.com/go-logr/zapr"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/containerd"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/logging"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/orchestrate"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/watcher"
 )
 
 func main() {
-	rootLog := configureLogging()
+	rootLog := logging.ConfigureLogger("stdout")
 	agentLog := rootLog.WithName("agent")
 
 	cfg, err := LoadConfigOrDefault(ConfigMapPath)
@@ -45,7 +41,7 @@ func main() {
 	restorer := orchestrate.NewRestorer(
 		orchestrate.RestorerConfig{
 			CheckpointBasePath: cfg.Checkpoint.BasePath,
-			CRIUSettings:       &cfg.Checkpoint.CRIU,
+			NSRestorePath:      cfg.Checkpoint.NSRestorePath,
 		},
 		discoveryClient,
 		rootLog.WithName("restorer"),
@@ -92,48 +88,6 @@ func main() {
 	}
 
 	agentLog.Info("Agent stopped")
-}
-
-func configureLogging() logr.Logger {
-	level := strings.TrimSpace(strings.ToLower(os.Getenv("CHREK_LOG_LEVEL")))
-	if level == "" {
-		level = "info"
-	}
-
-	zapLevel := zapcore.InfoLevel
-	parseErr := error(nil)
-	switch level {
-	case "trace", "debug":
-		zapLevel = zapcore.DebugLevel
-	case "info":
-		zapLevel = zapcore.InfoLevel
-	case "warn", "warning":
-		zapLevel = zapcore.WarnLevel
-	case "error":
-		zapLevel = zapcore.ErrorLevel
-	default:
-		parseErr = fmt.Errorf("invalid level %q", level)
-	}
-
-	zapCfg := zap.Config{
-		Level:            zap.NewAtomicLevelAt(zapLevel),
-		Development:      true,
-		Encoding:         "console",
-		EncoderConfig:    zap.NewDevelopmentEncoderConfig(),
-		OutputPaths:      []string{"stdout"},
-		ErrorOutputPaths: []string{"stderr"},
-	}
-	zapCfg.EncoderConfig.EncodeTime = zapcore.RFC3339NanoTimeEncoder
-	zapLog, err := zapCfg.Build()
-	if err != nil {
-		zapLog, _ = zap.NewDevelopment()
-	}
-
-	log := zapr.NewLogger(zapLog)
-	if parseErr != nil {
-		log.WithName("setup").Info("Invalid CHREK_LOG_LEVEL, falling back to info", "value", level, "error", parseErr)
-	}
-	return log
 }
 
 func fatal(log logr.Logger, err error, msg string, keysAndValues ...interface{}) {

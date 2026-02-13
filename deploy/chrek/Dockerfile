@@ -67,7 +67,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /chrek-agent ./cmd/agent
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /ns-restore-runner ./cmd/ns-restore-runner
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /nsrestore ./cmd/nsrestore
 
 # =============================================================================
 # Stage: CRIU Builder - Build CRIU with CUDA plugin
@@ -138,7 +138,7 @@ RUN chmod +x /usr/local/sbin/cuda-checkpoint
 
 # Copy the built binaries
 COPY --from=builder /chrek-agent /usr/local/bin/chrek-agent
-COPY --from=builder /ns-restore-runner /usr/local/bin/ns-restore-runner
+COPY --from=builder /nsrestore /usr/local/bin/nsrestore
 
 # Create directories
 RUN mkdir -p /checkpoints /var/run/chrek
@@ -160,7 +160,7 @@ ENV ORIGINAL_BASE_IMAGE=${BASE_IMAGE}
 
 USER root
 
-# Install minimal runtime dependencies for CRIU restore (ns-restore-runner runs here via nsenter)
+# Install minimal runtime dependencies for CRIU restore (nsrestore runs here via nsenter)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libbsd0 \
     libcap2 \
@@ -178,7 +178,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy CRIU from builder (needed by ns-restore-runner running inside these namespaces)
+# Copy CRIU from builder (needed by nsrestore running inside these namespaces)
 COPY --from=criu-builder /criu-install/usr/local /usr/local
 RUN criu --version && echo "CRIU installed successfully"
 
@@ -186,9 +186,9 @@ RUN criu --version && echo "CRIU installed successfully"
 COPY --from=criu-builder /tmp/cuda-checkpoint/bin/x86_64_Linux/cuda-checkpoint /usr/local/sbin/cuda-checkpoint
 RUN chmod +x /usr/local/sbin/cuda-checkpoint
 
-# Copy ns-restore-runner binary (invoked by DaemonSet via nsenter)
-COPY --from=builder /ns-restore-runner /usr/local/bin/ns-restore-runner
-RUN chmod +x /usr/local/bin/ns-restore-runner
+# Copy nsrestore binary (invoked by DaemonSet via nsenter)
+COPY --from=builder /nsrestore /usr/local/bin/nsrestore
+RUN chmod +x /usr/local/bin/nsrestore
 
 # Create directories
 RUN mkdir -p /checkpoints /var/run/criu /var/criu-work

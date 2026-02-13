@@ -1,4 +1,4 @@
-package nsrunner
+package criu
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu"
+	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
 )
@@ -27,24 +27,20 @@ const (
 	restoreLogFile = "restore.log"
 	procStdoutPath = "/proc/1/fd/1"
 	procStderrPath = "/proc/1/fd/2"
-	criuBinaryPath = "/usr/local/sbin/criu"
 )
 
+// RestoreOptions holds configuration for an in-namespace CRIU restore.
 type RestoreOptions struct {
-	CheckpointPath  string
-	WorkDir         string
-	CUDADeviceMap   string
-	RstSibling      bool
-	MntnsCompatMode bool
-	EvasiveDevices  bool
-	ForceIrmap      bool
+	CheckpointPath string
+	CUDADeviceMap  string
 }
 
+// RestoreInNamespace performs a CRIU restore from inside the target container's namespaces.
+// It reads all CRIU settings from the checkpoint manifest.
 func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logger) (int, int, error) {
 	restoreStart := time.Now()
-	log.Info("Starting ns-restore-runner restore workflow",
+	log.Info("Starting nsrestore restore workflow",
 		"checkpoint_path", opts.CheckpointPath,
-		"work_dir", opts.WorkDir,
 		"has_cuda_map", opts.CUDADeviceMap != "",
 	)
 
@@ -52,10 +48,11 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to read manifest: %w", err)
 	}
+	settings := m.CRIUDump.CRIU
 	log.Info("Loaded checkpoint manifest",
 		"ext_mounts", len(m.CRIUDump.ExtMnt),
-		"criu_log_level", m.CRIUDump.CRIU.LogLevel,
-		"manage_cgroups_mode", m.CRIUDump.CRIU.ManageCgroupsMode,
+		"criu_log_level", settings.LogLevel,
+		"manage_cgroups_mode", settings.ManageCgroupsMode,
 		"checkpoint_has_cuda", !m.CUDA.IsEmpty(),
 	)
 
@@ -65,7 +62,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	}
 	defer remountProcSys(false, log) //nolint:errcheck
 
-	manageCgroupsMode := strings.ToLower(strings.TrimSpace(m.CRIUDump.CRIU.ManageCgroupsMode))
+	manageCgroupsMode := strings.ToLower(strings.TrimSpace(settings.ManageCgroupsMode))
 	if manageCgroupsMode != "ignore" {
 		log.Info("Remounting /sys/fs/cgroup read-write")
 		if err := remountCgroupFS(true, log); err != nil {
@@ -74,7 +71,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 		defer remountCgroupFS(false, log) //nolint:errcheck
 	}
 
-	imageDir, imageDirFD, err := criu.OpenPathForCRIU(opts.CheckpointPath)
+	imageDir, imageDirFD, err := criuutil.OpenPathForCRIU(opts.CheckpointPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to open image directory: %w", err)
 	}
@@ -82,11 +79,11 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 
 	var workDirFile *os.File
 	var workDirFD int32 = -1
-	if opts.WorkDir != "" {
-		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
+	if settings.WorkDir != "" {
+		if err := os.MkdirAll(settings.WorkDir, 0755); err != nil {
 			log.Error(err, "Failed to create work directory")
 		} else {
-			f, fd, err := criu.OpenPathForCRIU(opts.WorkDir)
+			f, fd, err := criuutil.OpenPathForCRIU(settings.WorkDir)
 			if err == nil {
 				workDirFile = f
 				workDirFD = fd
@@ -97,13 +94,13 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 		}
 	}
 
-	extMounts, err := generateExtMountMaps(m)
+	extMounts, err := generateRestoreExtMountMaps(m)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to generate ext mount maps: %w", err)
 	}
 	log.Info("Generated external mount map set", "ext_mount_count", len(extMounts))
 
-	criuOpts := buildRestoreOptions(m, imageDirFD, workDirFD, extMounts, opts)
+	criuOpts := buildRestoreOpts(m, imageDirFD, workDirFD, extMounts)
 
 	criuConfPath := filepath.Join(opts.CheckpointPath, config.CheckpointCRIUConfFilename)
 	if _, err := os.Stat(criuConfPath); err == nil {
@@ -112,10 +109,10 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	}
 
 	c := criulib.MakeCriu()
-	if _, err := os.Stat(criuBinaryPath); err != nil {
-		return 0, 0, fmt.Errorf("criu binary not found at %s: %w", criuBinaryPath, err)
+	if _, err := os.Stat(settings.BinaryPath); err != nil {
+		return 0, 0, fmt.Errorf("criu binary not found at %s: %w", settings.BinaryPath, err)
 	}
-	c.SetCriuPath(criuBinaryPath)
+	c.SetCriuPath(settings.BinaryPath)
 
 	netNsFile, err := os.Open(netNsPath)
 	if err != nil {
@@ -135,7 +132,7 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	log.Info("Executing go-criu Restore call")
 	if err := c.Restore(criuOpts, notify); err != nil {
 		log.Error(err, "go-criu Restore returned error")
-		criu.LogRestoreErrors(opts.CheckpointPath, opts.WorkDir, log)
+		criuutil.LogRestoreErrors(opts.CheckpointPath, settings.WorkDir, log)
 		return 0, 0, fmt.Errorf("CRIU restore failed: %w", err)
 	}
 	log.Info("CRIU restore completed", "pid", notify.restoredPID, "duration", time.Since(restoreStart))
@@ -150,11 +147,11 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 		log.Error(err, "Failed to resolve restored host PID from NSpid")
 	}
 
-	log.Info("ns-restore-runner completed successfully", "restored_pid", notify.restoredPID)
+	log.Info("nsrestore completed successfully", "restored_pid", notify.restoredPID)
 	return int(notify.restoredPID), restoredHostPID, nil
 }
 
-func buildRestoreOptions(m *manifest.CheckpointManifest, imageDirFD, workDirFD int32, extMounts []*criurpc.ExtMountMap, restoreOpts RestoreOptions) *criurpc.CriuOpts {
+func buildRestoreOpts(m *manifest.CheckpointManifest, imageDirFD, workDirFD int32, extMounts []*criurpc.ExtMountMap) *criurpc.CriuOpts {
 	settings := m.CRIUDump.CRIU
 
 	var cgMode criurpc.CriuCgMode
@@ -175,10 +172,10 @@ func buildRestoreOptions(m *manifest.CheckpointManifest, imageDirFD, workDirFD i
 		LogFile:     proto.String(restoreLogFile),
 		Root:        proto.String("/"),
 
-		RstSibling:      proto.Bool(restoreOpts.RstSibling),
-		MntnsCompatMode: proto.Bool(restoreOpts.MntnsCompatMode),
-		EvasiveDevices:  proto.Bool(restoreOpts.EvasiveDevices),
-		ForceIrmap:      proto.Bool(restoreOpts.ForceIrmap),
+		RstSibling:      proto.Bool(settings.RstSibling),
+		MntnsCompatMode: proto.Bool(settings.MntnsCompatMode),
+		EvasiveDevices:  proto.Bool(settings.EvasiveDevices),
+		ForceIrmap:      proto.Bool(settings.ForceIrmap),
 
 		ShellJob:          proto.Bool(settings.ShellJob),
 		TcpClose:          proto.Bool(settings.TcpClose),
@@ -197,7 +194,7 @@ func buildRestoreOptions(m *manifest.CheckpointManifest, imageDirFD, workDirFD i
 	return criuOpts
 }
 
-func generateExtMountMaps(m *manifest.CheckpointManifest) ([]*criurpc.ExtMountMap, error) {
+func generateRestoreExtMountMaps(m *manifest.CheckpointManifest) ([]*criurpc.ExtMountMap, error) {
 	if len(m.CRIUDump.ExtMnt) == 0 {
 		return nil, fmt.Errorf("checkpoint manifest is missing criuDump.extMnt")
 	}
@@ -236,7 +233,7 @@ func generateExtMountMaps(m *manifest.CheckpointManifest) ([]*criurpc.ExtMountMa
 }
 
 func registerStdioInheritFDs(c *criulib.Criu, checkpointPath string, log logr.Logger) ([]*os.File, error) {
-	stdoutResources, stderrResources, err := criu.DiscoverStdioInheritResources(checkpointPath)
+	stdoutResources, stderrResources, err := DiscoverStdioInheritResources(checkpointPath)
 	if err != nil {
 		return nil, err
 	}

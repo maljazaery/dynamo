@@ -120,7 +120,11 @@ rbac:
 # Dynamic values (NODE_NAME, RESTRICTED_NAMESPACE, etc.) come from environment variables
 config:
   checkpoint:
+    # Path to the nsrestore binary in the placeholder image
+    nsRestorePath: /usr/local/bin/nsrestore
     criu:
+      # Path to the criu binary
+      binaryPath: /usr/local/sbin/criu
       # Ghost file size limit in bytes
       ghostLimit: 536870912
       # CRIU logging verbosity (0-4)

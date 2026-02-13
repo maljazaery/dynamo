@@ -16,8 +16,8 @@ import (
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/config"
 	criuutil "github.com/ai-dynamo/dynamo/deploy/chrek/pkg/criu/util"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/cuda"
-	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/filesystem"
+	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/inspect"
 	"github.com/ai-dynamo/dynamo/deploy/chrek/pkg/manifest"
 )
 
@@ -86,6 +86,17 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 	}
 	r.log.Info("Resolved placeholder container", "pid", placeholderPID)
 
+	restoreCgroupRoot, err := resolveCgroupRootFromHostPID(placeholderPID)
+	if err != nil {
+		r.log.Error(err, "Failed to resolve placeholder cgroup root; proceeding without explicit cgroup remap", "pid", placeholderPID)
+		restoreCgroupRoot = ""
+	}
+	if restoreCgroupRoot != "" {
+		r.log.Info("Using placeholder cgroup root for restore remap", "pid", placeholderPID, "cgroup_root", restoreCgroupRoot)
+	} else {
+		r.log.Info("Using checkpoint cgroup mapping without explicit remap", "pid", placeholderPID)
+	}
+
 	cudaDeviceMap := ""
 	if !m.CUDA.IsEmpty() {
 		if len(m.CUDA.SourceGPUUUIDs) == 0 {
@@ -130,7 +141,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 	}
 
 	// Step 4: Execute nsenter + nsrestore
-	restoredPID, restoredHostPID, err := r.execNSRestore(ctx, placeholderPID, checkpointPath, cudaDeviceMap)
+	restoredPID, restoredHostPID, err := r.execNSRestore(ctx, placeholderPID, checkpointPath, cudaDeviceMap, restoreCgroupRoot)
 	if err != nil {
 		return nil, fmt.Errorf("CRIU restore failed: %w", err)
 	}
@@ -178,6 +189,35 @@ func ensureDevNetTun(targetRoot string, log logr.Logger) {
 		return
 	}
 	log.Info("Created /dev/net/tun in placeholder rootfs")
+}
+
+func resolveCgroupRootFromHostPID(pid int) (string, error) {
+	cgroupFile := filepath.Join(config.HostProcPath, strconv.Itoa(pid), "cgroup")
+	data, err := os.ReadFile(cgroupFile)
+	if err != nil {
+		return "", fmt.Errorf("failed reading %s: %w", cgroupFile, err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "0::") {
+			continue
+		}
+		path := strings.TrimPrefix(line, "0::")
+		if path == "" {
+			return "/", nil
+		}
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		return filepath.Clean(path), nil
+	}
+
+	return "", fmt.Errorf("unified cgroup entry not found in %s", cgroupFile)
 }
 
 // validateRestoredProcess checks that the restored process is alive and not a zombie.

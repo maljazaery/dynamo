@@ -25,6 +25,16 @@ func (c *CheckpointSpec) Validate() error {
 	if c.NSRestorePath == "" {
 		return &ConfigError{Field: "nsRestorePath", Message: "nsRestorePath is required"}
 	}
+	cgroupMode := strings.ToLower(strings.TrimSpace(c.CRIU.ManageCgroupsMode))
+	switch cgroupMode {
+	case "ignore", "soft", "full", "strict":
+		c.CRIU.ManageCgroupsMode = cgroupMode
+	default:
+		return &ConfigError{
+			Field:   "criu.manageCgroupsMode",
+			Message: "must be one of: ignore, soft, full, strict",
+		}
+	}
 	return c.RootfsExclusions.Validate()
 }
 

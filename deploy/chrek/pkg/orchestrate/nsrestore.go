@@ -19,15 +19,24 @@ type nsrestoreResult struct {
 // execNSRestore launches the nsrestore binary inside the placeholder container's
 // namespaces via nsenter and parses the JSON result from stdout.
 // Logs from nsrestore flow directly to the agent's stderr.
-func (r *Restorer) execNSRestore(ctx context.Context, placeholderPID int, checkpointPath, cudaDeviceMap string) (int, int, error) {
+func (r *Restorer) execNSRestore(ctx context.Context, placeholderPID int, checkpointPath, cudaDeviceMap, cgroupRoot string) (int, int, error) {
 	args := []string{
 		"-t", strconv.Itoa(placeholderPID),
-		"-m", "-n", "-p", "-i", "-u",
+		// Intentionally exclude cgroup namespace (-C): CRIU must manage cgroups
+		// from the host-visible hierarchy so --cgroup-root remap works.
+		"-m", // mount
+		"-u", // uts
+		"-i", // ipc
+		"-n", // net
+		"-p", // pid
 		"--", r.cfg.NSRestorePath,
 		"--checkpoint-path", checkpointPath,
 	}
 	if cudaDeviceMap != "" {
 		args = append(args, "--cuda-device-map", cudaDeviceMap)
+	}
+	if cgroupRoot != "" {
+		args = append(args, "--cgroup-root", cgroupRoot)
 	}
 
 	cmd := exec.CommandContext(ctx, "nsenter", args...)

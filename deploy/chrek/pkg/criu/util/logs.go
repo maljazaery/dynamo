@@ -1,6 +1,7 @@
 package criu
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,5 +77,48 @@ func LogRestoreSummary(path string, log logr.Logger) {
 	}
 	if len(tail) > 0 {
 		log.Info("CRIU restore tail", "path", path, "lines", strings.Join(tail, "\n"))
+	}
+}
+
+func LogCgroupRestoreErrors(checkpointPath, workDir string, log logr.Logger) {
+	candidates := make([]string, 0, 2)
+	if workDir != "" {
+		candidates = append(candidates, filepath.Join(workDir, "restore.log"))
+	}
+	candidates = append(candidates, filepath.Join(checkpointPath, "restore.log"))
+
+	for _, logPath := range candidates {
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(string(data), "\n")
+		cgroupErrors := make([]string, 0, 20)
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			lower := strings.ToLower(trimmed)
+			if !strings.Contains(lower, "cgroup") {
+				continue
+			}
+			if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "fail") {
+				cgroupErrors = append(cgroupErrors, trimmed)
+			}
+			if len(cgroupErrors) >= 20 {
+				break
+			}
+		}
+		if len(cgroupErrors) > 0 {
+			log.Error(
+				fmt.Errorf("detected %d cgroup restore errors", len(cgroupErrors)),
+				"CRIU cgroup restore errors",
+				"path", logPath,
+				"lines", strings.Join(cgroupErrors, "\n"),
+			)
+		}
+		return
 	}
 }

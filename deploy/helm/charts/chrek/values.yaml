@@ -141,11 +141,11 @@ config:
       extUnixSk: true         # External Unix sockets
       linkRemap: true         # Handle deleted-but-open files
       extMasters: true        # External bind mount masters
-      manageCgroupsMode: "ignore"    # Ignore cgroup management for restore (ignore/soft/full/strict)
+      manageCgroupsMode: "soft"      # CRIU cgroup management mode (ignore/soft/full/strict)
 
       # Restore-specific options (only apply during CRIU restore, not dump)
       rstSibling: true         # Restore as sibling process (required for go-criu swrk mode)
-      mntnsCompatMode: false   # Mount namespace compatibility mode
+      mntnsCompatMode: true    # Mount namespace compatibility mode
       evasiveDevices: true     # Use any device path if original is inaccessible
       forceIrmap: true         # Force resolving inotify/fsnotify watch names
 

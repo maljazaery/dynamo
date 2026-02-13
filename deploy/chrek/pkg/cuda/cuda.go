@@ -121,11 +121,14 @@ func Restore(ctx context.Context, m *manifest.CheckpointManifest, restoredPID in
 		)
 
 		if len(cudaPIDs) > 0 {
+			log.Info("CUDA restore sequence selected restore-then-unlock path", "cuda_pids", len(cudaPIDs))
 			if err := RestoreProcesses(ctx, cudaPIDs, deviceMap, log); err != nil {
 				return err
 			}
-			log.Info("Running cuda-checkpoint unlock for candidate CUDA PIDs after restore", "cuda_pids", len(cudaPIDs))
-			UnlockProcesses(context.Background(), cudaPIDs, log)
+			log.Info("Running strict cuda-checkpoint unlock after restore", "cuda_pids", len(cudaPIDs))
+			if err := UnlockProcessesStrict(context.Background(), cudaPIDs, log); err != nil {
+				return err
+			}
 			log.Info("CUDA restore completed", "cuda_pids", len(cudaPIDs), "device_map", deviceMap)
 			return nil
 		}

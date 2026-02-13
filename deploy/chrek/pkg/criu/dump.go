@@ -2,6 +2,7 @@ package criu
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	criulib "github.com/checkpoint-restore/go-criu/v8"
@@ -83,7 +84,7 @@ func BuildDumpOptions(
 	// Cgroup management mode
 	criuOpts.ManageCgroups = proto.Bool(true)
 	cgMode := criurpc.CriuCgMode_IGNORE
-	switch settings.ManageCgroupsMode {
+	switch strings.ToLower(strings.TrimSpace(settings.ManageCgroupsMode)) {
 	case "soft":
 		cgMode = criurpc.CriuCgMode_SOFT
 	case "full":

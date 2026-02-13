@@ -24,6 +24,7 @@ func main() {
 
 	checkpointPath := flag.String("checkpoint-path", "", "Path to checkpoint directory")
 	cudaDeviceMap := flag.String("cuda-device-map", "", "CUDA device map for cuda-checkpoint restore")
+	cgroupRoot := flag.String("cgroup-root", "", "CRIU cgroup root remap path")
 	flag.Parse()
 
 	if *checkpointPath == "" {
@@ -33,6 +34,7 @@ func main() {
 	opts := criu.RestoreOptions{
 		CheckpointPath: *checkpointPath,
 		CUDADeviceMap:  *cudaDeviceMap,
+		CgroupRoot:     *cgroupRoot,
 	}
 
 	restoredPID, restoredHostPID, err := criu.RestoreInNamespace(context.Background(), opts, log)

@@ -40,6 +40,19 @@ func Unlock(ctx context.Context, pid int, log logr.Logger) error {
 	return runAction(ctx, pid, actionUnlock, "", log)
 }
 
+func getState(ctx context.Context, pid int) (string, error) {
+	cmd := exec.CommandContext(ctx, cudaCheckpointBinary, "--get-state", "--pid", strconv.Itoa(pid))
+	output, err := cmd.CombinedOutput()
+	state := strings.TrimSpace(string(output))
+	if err != nil {
+		return "", fmt.Errorf("cuda-checkpoint --get-state failed for pid %d: %w (output: %s)", pid, err, state)
+	}
+	if state == "" {
+		return "", fmt.Errorf("cuda-checkpoint --get-state returned empty state for pid %d", pid)
+	}
+	return state, nil
+}
+
 func runAction(ctx context.Context, pid int, action, deviceMap string, log logr.Logger) error {
 	args := []string{"--action", action, "--pid", strconv.Itoa(pid)}
 	if action == actionRestore && deviceMap != "" {
@@ -71,6 +84,31 @@ func UnlockProcesses(ctx context.Context, pids []int, log logr.Logger) {
 			log.Error(err, "Failed to unlock CUDA process", "pid", pid)
 		}
 	}
+}
+
+// UnlockProcessesStrict unlocks all CUDA PIDs and verifies each process is running.
+func UnlockProcessesStrict(ctx context.Context, pids []int, log logr.Logger) error {
+	for _, pid := range pids {
+		if err := Unlock(ctx, pid, log); err != nil {
+			// Some driver/runtime versions can return an unlock error when the process
+			// has already transitioned back to running.
+			state, stateErr := getState(ctx, pid)
+			if stateErr == nil && state == "running" {
+				log.Info("cuda-checkpoint unlock returned error but process is already running", "pid", pid)
+				continue
+			}
+			return fmt.Errorf("failed to unlock CUDA process %d: %w", pid, err)
+		}
+		state, err := getState(ctx, pid)
+		if err != nil {
+			return fmt.Errorf("failed to verify CUDA state for pid %d after unlock: %w", pid, err)
+		}
+		if state != "running" {
+			return fmt.Errorf("cuda process %d is %q after unlock, expected %q", pid, state, "running")
+		}
+		log.Info("cuda-checkpoint unlock verified", "pid", pid, "state", state)
+	}
+	return nil
 }
 
 // RestoreProcesses restores a list of CUDA PIDs.

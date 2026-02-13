@@ -107,30 +107,47 @@ if [[ "$health_ok" != "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Sanity request -- validate end-to-end
+# Step 2: Sanity request -- validate end-to-end (with retries)
+#
+# For Dynamo scenarios the frontend HTTP server can pass a basic health check
+# before the vllm worker has registered, causing 404 on /v1/chat/completions.
+# Retry until the worker is ready.
 # ---------------------------------------------------------------------------
 echo ""
-echo "[client.sh] Sending sanity request..."
+echo "[client.sh] Sending sanity request (will retry up to 60 times)..."
 
-SANITY_RESPONSE=$(curl -s -w "\n%{http_code}" "${SERVER_URL}/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "model": "'"$MODEL"'",
-        "messages": [{"role": "user", "content": "Say hello."}],
-        "max_tokens": 10,
-        "stream": false
-    }' 2>/dev/null)
+SANITY_MAX_ATTEMPTS=60
+SANITY_RETRY_INTERVAL=5
+sanity_ok=false
 
-SANITY_HTTP_CODE=$(echo "$SANITY_RESPONSE" | tail -n1)
-SANITY_BODY=$(echo "$SANITY_RESPONSE" | sed '$d')
+for ((j=1; j<=SANITY_MAX_ATTEMPTS; j++)); do
+    SANITY_RESPONSE=$(curl -s -w "\n%{http_code}" "${SERVER_URL}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "model": "'"$MODEL"'",
+            "messages": [{"role": "user", "content": "Say hello."}],
+            "max_tokens": 10,
+            "stream": false
+        }' 2>/dev/null)
 
-if [[ "$SANITY_HTTP_CODE" != "200" ]]; then
-    echo "ERROR: Sanity request failed (HTTP $SANITY_HTTP_CODE)" >&2
-    echo "Response body: $SANITY_BODY" >&2
+    SANITY_HTTP_CODE=$(echo "$SANITY_RESPONSE" | tail -n1)
+    SANITY_BODY=$(echo "$SANITY_RESPONSE" | sed '$d')
+
+    if [[ "$SANITY_HTTP_CODE" == "200" ]]; then
+        echo "[client.sh] Sanity request succeeded on attempt $j (HTTP 200)"
+        echo "$SANITY_BODY" > "${OUTPUT_DIR}/sanity_response.json"
+        sanity_ok=true
+        break
+    fi
+    echo "[client.sh] Sanity attempt $j/$SANITY_MAX_ATTEMPTS: HTTP $SANITY_HTTP_CODE (worker may still be loading)"
+    sleep "$SANITY_RETRY_INTERVAL"
+done
+
+if [[ "$sanity_ok" != "true" ]]; then
+    echo "ERROR: Sanity request failed after $SANITY_MAX_ATTEMPTS attempts (last HTTP $SANITY_HTTP_CODE)" >&2
+    echo "Last response body: $SANITY_BODY" >&2
     exit 1
 fi
-echo "[client.sh] Sanity request succeeded (HTTP $SANITY_HTTP_CODE)"
-echo "$SANITY_BODY" > "${OUTPUT_DIR}/sanity_response.json"
 
 # ---------------------------------------------------------------------------
 # Step 3: Scrape baseline metrics (before any load)

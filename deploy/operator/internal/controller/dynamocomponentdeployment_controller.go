@@ -1181,10 +1181,6 @@ type generateResourceOption struct {
 //nolint:gocyclo,nakedret
 func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx context.Context, opt generateResourceOption, role dynamo.Role) (podTemplateSpec *corev1.PodTemplateSpec, err error) {
 	podLabels := r.getKubeLabels(opt.dynamoComponentDeployment)
-	// Restore labels are operator-controlled. Clear any stale values from prior
-	// reconciliation versions or user-provided metadata before applying the
-	// explicit ready-checkpoint contract below.
-	delete(podLabels, commonconsts.KubeLabelIsRestoreTarget)
 	if opt.isStealingTrafficDebugModeEnabled {
 		podLabels[commonconsts.KubeLabelDynamoDeploymentTargetType] = DeploymentTargetTypeDebug
 	}
@@ -1290,6 +1286,7 @@ func (r *DynamoComponentDeploymentReconciler) generatePodTemplateSpec(ctx contex
 		maps.Copy(podAnnotations, extraPodMetadata.Annotations)
 		maps.Copy(podLabels, extraPodMetadata.Labels)
 	}
+	delete(podLabels, commonconsts.KubeLabelIsRestoreTarget)
 
 	// Explicit restore orchestration contract:
 	// only mark pods as restore targets when checkpoint material is ready.

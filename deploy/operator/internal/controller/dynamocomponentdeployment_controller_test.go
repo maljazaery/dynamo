@@ -1248,7 +1248,7 @@ func TestDynamoComponentDeploymentReconciler_generatePodTemplateSpec_RestoreLabe
 					DynamoNamespace: ptr.To("default"),
 					Labels: map[string]string{
 						commonconsts.KubeLabelDynamoGraphDeploymentName: "test-dgd",
-						commonconsts.KubeLabelIsRestoreTarget:         commonconsts.KubeLabelValueTrue,
+						commonconsts.KubeLabelIsRestoreTarget:           commonconsts.KubeLabelValueTrue,
 					},
 					Checkpoint: &v1alpha1.ServiceCheckpointConfig{
 						Enabled:       true,

@@ -134,7 +134,7 @@ const (
 
 	// Kubernetes labels
 	KubeLabelIsCheckpointSource = "nvidia.com/chrek-is-checkpoint-source" // Pod label that triggers DaemonSet auto-checkpoint
-	KubeLabelCheckpointHash   = "nvidia.com/chrek-checkpoint-hash"      // Checkpoint identity hash (= DynamoCheckpoint CR name)
+	KubeLabelCheckpointHash     = "nvidia.com/chrek-checkpoint-hash"      // Checkpoint identity hash (= DynamoCheckpoint CR name)
 	KubeLabelIsRestoreTarget    = "nvidia.com/chrek-is-restore-target"    // Pod label that triggers DaemonSet auto-restore
 
 	// Environment variables injected into pods

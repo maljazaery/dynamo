@@ -220,8 +220,10 @@ for SCENARIO in $SCENARIOS; do
     [[ "$DRY_RUN" == "true" ]] && SERVER_CMD+=(--dry-run)
 
     echo "[run.sh] Starting server on $SERVER_NODE ..."
+    # Use process substitution (not a pipe) so $! captures srun's PID.
+    # A pipe would make $! point to tee, leaving srun unkillable.
     "${SRUN_BASE[@]}" --nodelist="$SERVER_NODE" "${SERVER_CMD[@]}" \
-        2>&1 | tee "${LOG_DIR}/server_srun.log" &
+        > >(tee "${LOG_DIR}/server_srun.log") 2>&1 &
     SERVER_PID=$!
     echo "[run.sh] Server srun PID: $SERVER_PID"
 

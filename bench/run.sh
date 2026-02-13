@@ -221,7 +221,7 @@ for SCENARIO in $SCENARIOS; do
 
     echo "[run.sh] Starting server on $SERVER_NODE ..."
     "${SRUN_BASE[@]}" --nodelist="$SERVER_NODE" "${SERVER_CMD[@]}" \
-        > "${LOG_DIR}/server_srun.log" 2>&1 &
+        2>&1 | tee "${LOG_DIR}/server_srun.log" &
     SERVER_PID=$!
     echo "[run.sh] Server srun PID: $SERVER_PID"
 

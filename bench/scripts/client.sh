@@ -91,7 +91,7 @@ sleep "$HEALTH_INITIAL_WAIT"
 
 health_ok=false
 for ((i=1; i<=HEALTH_MAX_ATTEMPTS; i++)); do
-    http_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_ENDPOINT" 2>/dev/null || echo "000")
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_ENDPOINT" 2>/dev/null) || http_code="000"
     if [[ "$http_code" == "200" ]]; then
         echo "[client.sh] Health check passed on attempt $i (HTTP $http_code)"
         health_ok=true

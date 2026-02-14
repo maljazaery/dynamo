@@ -172,6 +172,10 @@ for C in $CONCURRENCIES; do
     echo "[client.sh] Concurrency: $C  (requests=$REQUEST_COUNT, warmup=$WARMUP_COUNT)"
     echo "------------------------------------------------------------"
 
+    # Per-concurrency artifact directory so results are not overwritten
+    AIPERF_CONCURRENCY_DIR="${AIPERF_DIR}/concurrency_${C}"
+    mkdir -p "$AIPERF_CONCURRENCY_DIR"
+
     aiperf profile \
         --model "$MODEL" \
         --tokenizer "$MODEL" \
@@ -192,7 +196,7 @@ for C in $CONCURRENCIES; do
         --warmup-request-count "$WARMUP_COUNT" \
         --num-dataset-entries "$DATASET_ENTRIES" \
         --random-seed 100 \
-        --artifact-dir "$AIPERF_DIR" \
+        --artifact-dir "$AIPERF_CONCURRENCY_DIR" \
         --ui simple \
         -H 'Authorization: Bearer NOT_USED' \
         -H 'Accept: text/event-stream'

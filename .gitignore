@@ -118,6 +118,7 @@ core
 # Benchmarks
 benchmarks/results
 profiling_results*
+bench_results/
 
 # Direnv
 .envrc

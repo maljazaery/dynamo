@@ -283,7 +283,7 @@ impl OpenAIPreprocessor {
                 expected_output_tokens: hints.and_then(|h| h.osl),
                 priority_jump: hints.and_then(|h| h.latency_sensitivity),
                 lora_name,
-                pin: hints.and_then(|h| h.pin),
+                cache_control_ttl: nvext.cache_control.as_ref().map(|cc| cc.ttl_seconds()),
             };
             builder.routing(Some(routing));
         } else if lora_name.is_some() {

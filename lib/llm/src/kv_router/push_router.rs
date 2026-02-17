@@ -20,7 +20,7 @@ use crate::{
         CacheControlClient, KvRouter,
         cache_control::spawn_pin_prefix,
         metrics::RouterRequestMetrics,
-        protocols::{TokensWithHashes, WorkerWithDpRank},
+        protocols::{BlockExtraInfo, TokensWithHashes, WorkerWithDpRank},
     },
     preprocessor::PreprocessedRequest,
     protocols::common::{
@@ -115,6 +115,21 @@ impl KvPushRouter {
         }
     }
 
+    fn routing_inputs(
+        request: &PreprocessedRequest,
+    ) -> (&[u32], Option<&[Option<BlockExtraInfo>]>) {
+        if let Some(mm_routing_info) = request.mm_routing_info.as_ref() {
+            let routing_tokens = mm_routing_info.routing_token_ids.as_slice();
+            if !routing_tokens.is_empty() {
+                return (
+                    routing_tokens,
+                    Some(mm_routing_info.block_mm_infos.as_slice()),
+                );
+            }
+        }
+        (&request.token_ids, None)
+    }
+
     /// Select a worker for the request, either using a preselected worker or finding the best match.
     ///
     /// When `is_query_only` is false, this also registers the request with the scheduler via `add_request`.
@@ -130,6 +145,7 @@ impl KvPushRouter {
         let priority_jump = routing.and_then(|r| r.priority_jump).unwrap_or(0.0);
         let dp_rank = routing.and_then(|r| r.dp_rank).unwrap_or(0);
         let expected_output_tokens = routing.and_then(|r| r.expected_output_tokens);
+        let (routing_token_ids, block_mm_infos) = Self::routing_inputs(request);
 
         // Get pre-selected worker based on phase, with backend_instance_id as fallback
         let preselected_id = match phase {
@@ -147,13 +163,35 @@ impl KvPushRouter {
                 .chooser
                 .find_best_match(
                     Some(context_id),
-                    &request.token_ids,
+                    routing_token_ids,
+                    block_mm_infos,
                     request.router_config_override.as_ref(),
                     !is_query_only,
                     lora_name,
                     priority_jump,
                 )
                 .await?;
+
+            if !is_query_only {
+                let total_blocks = routing_token_ids
+                    .len()
+                    .div_ceil(self.chooser.block_size() as usize);
+                // NOTE: tests/mm_router/test_vllm_mm_router_e2e.py parses this log line.
+                // Keep the "[ROUTING] ... with X/Y blocks overlap" shape stable unless
+                // router tests are updated together.
+                tracing::debug!(
+                    request_id = %context_id,
+                    worker_id = best_worker.worker_id,
+                    dp_rank = best_worker.dp_rank,
+                    overlap_blocks = overlap_amount,
+                    total_blocks = total_blocks,
+                    "[ROUTING] Best: worker_{} dp_rank={} with {}/{} blocks overlap",
+                    best_worker.worker_id,
+                    best_worker.dp_rank,
+                    overlap_amount,
+                    total_blocks,
+                );
+            }
 
             return Ok(WorkerSelection {
                 instance_id: best_worker.worker_id,
@@ -172,14 +210,14 @@ impl KvPushRouter {
         let worker = WorkerWithDpRank::new(id, dp_rank);
         let overlap_blocks = self
             .chooser
-            .get_overlap_blocks(&request.token_ids, worker)
+            .get_overlap_blocks(routing_token_ids, worker)
             .await?;
 
         if !is_query_only {
             self.chooser
                 .add_request(
                     context_id.to_string(),
-                    &request.token_ids,
+                    routing_token_ids,
                     overlap_blocks,
                     expected_output_tokens,
                     worker,
@@ -282,10 +320,11 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
         let request_metrics =
             RouterRequestMetrics::from_component(self.chooser.client().endpoint.component());
         if let Some(ref tracker) = request.tracker {
-            let isl_blocks = request.token_ids.len().div_ceil(block_size);
+            let (routing_token_ids, _) = Self::routing_inputs(&request);
+            let isl_blocks = routing_token_ids.len().div_ceil(block_size);
             tracker.record_kv_hit(overlap_amount, isl_blocks);
             tracker.record_isl(
-                request.token_ids.len(),
+                routing_token_ids.len(),
                 overlap_amount as usize * block_size,
             );
             tracker.record_worker_full(instance_id, dp_rank, self.chooser.worker_type());

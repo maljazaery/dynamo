@@ -126,9 +126,9 @@ launch_scenario_2() {
     echo "[server.sh] dynamo.frontend PID: ${CHILD_PIDS[-1]}"
 
     # Start dynamo vllm worker (foreground-ish, but we track it)
-    local extra_args=(--enforce-eager --connector none)
+    local extra_args=(--connector none)
     if [[ "$DRY_RUN" == "true" ]]; then
-        extra_args+=(--gpu-memory-utilization 0.40)
+        extra_args+=(--enforce-eager --gpu-memory-utilization 0.40)
     fi
     DYN_SYSTEM_PORT=8081 python -m dynamo.vllm \
         --model "$MODEL" "${extra_args[@]}" &
@@ -166,9 +166,9 @@ launch_scenario_3() {
     echo "[server.sh] dynamo.frontend (vllm processor) PID: ${CHILD_PIDS[-1]}"
 
     # Start dynamo vllm worker
-    local extra_args=(--enforce-eager --connector none)
+    local extra_args=(--connector none)
     if [[ "$DRY_RUN" == "true" ]]; then
-        extra_args+=(--gpu-memory-utilization 0.40)
+        extra_args+=(--enforce-eager --gpu-memory-utilization 0.40)
     fi
     DYN_SYSTEM_PORT=8081 python -m dynamo.vllm \
         --model "$MODEL" "${extra_args[@]}" &

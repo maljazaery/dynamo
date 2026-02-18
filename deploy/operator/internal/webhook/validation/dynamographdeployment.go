@@ -28,7 +28,10 @@ import (
 	nvidiacomv1alpha1 "github.com/ai-dynamo/dynamo/deploy/operator/api/v1alpha1"
 	"github.com/ai-dynamo/dynamo/deploy/operator/internal/consts"
 	internalwebhook "github.com/ai-dynamo/dynamo/deploy/operator/internal/webhook"
+	grovev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -86,6 +89,11 @@ func (v *DynamoGraphDeploymentValidator) Validate(ctx context.Context) (admissio
 
 	// Validate restart
 	if err := v.validateRestart(); err != nil {
+		return nil, err
+	}
+
+	// Validate topology constraints
+	if err := v.validateTopologyConstraints(ctx); err != nil {
 		return nil, err
 	}
 
@@ -159,6 +167,11 @@ func (v *DynamoGraphDeploymentValidator) validateImmutableFields(old *nvidiacomv
 				serviceName,
 			))
 		}
+	}
+
+	// Validate topology constraint immutability
+	if err := v.validateTopologyConstraintImmutability(old); err != nil {
+		errs = append(errs, err)
 	}
 
 	return errors.Join(errs...)
@@ -442,6 +455,164 @@ func (v *DynamoGraphDeploymentValidator) validateAnnotations() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateTopologyConstraints validates topology constraint configuration on CREATE.
+// Topology constraints are independently optional at the spec and service levels.
+func (v *DynamoGraphDeploymentValidator) validateTopologyConstraints(ctx context.Context) error {
+	specConstraint := v.deployment.Spec.TopologyConstraint
+	hasAnyConstraint := specConstraint != nil
+
+	var errs []error
+
+	// Validate spec-level packDomain if set
+	if specConstraint != nil {
+		if !nvidiacomv1alpha1.IsValidTopologyDomain(specConstraint.PackDomain) {
+			errs = append(errs, fmt.Errorf("spec.topologyConstraint.packDomain %q is not a valid topology domain; "+
+				"must be one of: region, zone, datacenter, block, rack, host, numa", specConstraint.PackDomain))
+		}
+	}
+
+	// Validate each service's topologyConstraint (if set) and check hierarchy when both levels are present
+	for serviceName, service := range v.deployment.Spec.Services {
+		if service == nil || service.TopologyConstraint == nil {
+			continue
+		}
+		hasAnyConstraint = true
+
+		svcDomain := service.TopologyConstraint.PackDomain
+		fieldPath := fmt.Sprintf("spec.services[%s]", serviceName)
+
+		// Validate service packDomain
+		if !nvidiacomv1alpha1.IsValidTopologyDomain(svcDomain) {
+			errs = append(errs, fmt.Errorf("%s.topologyConstraint.packDomain %q is not a valid topology domain; "+
+				"must be one of: region, zone, datacenter, block, rack, host, numa", fieldPath, svcDomain))
+			continue
+		}
+
+		// Validate hierarchy only when both spec-level and service-level are set
+		if specConstraint != nil && nvidiacomv1alpha1.IsValidTopologyDomain(specConstraint.PackDomain) {
+			if err := nvidiacomv1alpha1.ValidateHierarchy(specConstraint.PackDomain, svcDomain, fieldPath); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	// No topology constraints anywhere — nothing more to validate
+	if !hasAnyConstraint {
+		return nil
+	}
+
+	// Validate packDomain values against the framework's topology CRD
+	if v.mgr != nil && v.isGrovePathway() {
+		if err := v.validateTopologyDomainsAgainstCRD(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// validateTopologyDomainsAgainstCRD reads the Grove ClusterTopology CRD and validates
+// that each packDomain used in the DGD exists as a level in the cluster's topology.
+func (v *DynamoGraphDeploymentValidator) validateTopologyDomainsAgainstCRD(ctx context.Context) error {
+	cl := v.mgr.GetClient()
+
+	ct := &grovev1alpha1.ClusterTopology{}
+	err := cl.Get(ctx, types.NamespacedName{Name: grovev1alpha1.DefaultClusterTopologyName}, ct)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return fmt.Errorf("topology-aware scheduling requires a ClusterTopology resource %q but it was not found; "+
+				"ensure the cluster topology is configured per the framework documentation", grovev1alpha1.DefaultClusterTopologyName)
+		}
+		return fmt.Errorf("failed to read ClusterTopology %q for topology validation: %w", grovev1alpha1.DefaultClusterTopologyName, err)
+	}
+
+	// Build set of available domains from the ClusterTopology
+	availableDomains := make(map[string]struct{}, len(ct.Spec.Levels))
+	for _, level := range ct.Spec.Levels {
+		availableDomains[string(level.Domain)] = struct{}{}
+	}
+
+	// Collect all unique domains to validate
+	domainsToCheck := map[nvidiacomv1alpha1.TopologyDomain]string{}
+	if v.deployment.Spec.TopologyConstraint != nil {
+		domainsToCheck[v.deployment.Spec.TopologyConstraint.PackDomain] = "spec.topologyConstraint.packDomain"
+	}
+	for serviceName, service := range v.deployment.Spec.Services {
+		if service != nil && service.TopologyConstraint != nil {
+			fieldPath := fmt.Sprintf("spec.services[%s].topologyConstraint.packDomain", serviceName)
+			domainsToCheck[service.TopologyConstraint.PackDomain] = fieldPath
+		}
+	}
+
+	var errs []error
+	for domain, fieldPath := range domainsToCheck {
+		if _, ok := availableDomains[string(domain)]; !ok {
+			errs = append(errs, fmt.Errorf("%s: domain %q does not exist in ClusterTopology %q; "+
+				"available domains: %v", fieldPath, domain, grovev1alpha1.DefaultClusterTopologyName, topologyLevelDomains(ct)))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// topologyLevelDomains returns the list of domain names from a ClusterTopology for error messages.
+func topologyLevelDomains(ct *grovev1alpha1.ClusterTopology) []string {
+	domains := make([]string, 0, len(ct.Spec.Levels))
+	for _, level := range ct.Spec.Levels {
+		domains = append(domains, string(level.Domain))
+	}
+	sort.Strings(domains)
+	return domains
+}
+
+// validateTopologyConstraintImmutability validates that topology constraints are not changed on UPDATE.
+func (v *DynamoGraphDeploymentValidator) validateTopologyConstraintImmutability(old *nvidiacomv1alpha1.DynamoGraphDeployment) error {
+	var errs []error
+
+	oldTC := old.Spec.TopologyConstraint
+	newTC := v.deployment.Spec.TopologyConstraint
+
+	// Check spec-level topology constraint immutability
+	if !topologyConstraintsEqual(oldTC, newTC) {
+		errs = append(errs, fmt.Errorf("spec.topologyConstraint is immutable and cannot be added, removed, or changed after creation; "+
+			"delete and recreate the DynamoGraphDeployment to change topology constraints"))
+	}
+
+	// Check per-service topology constraint immutability
+	for serviceName, newService := range v.deployment.Spec.Services {
+		oldService, exists := old.Spec.Services[serviceName]
+		if !exists {
+			continue
+		}
+
+		var oldSvcTC, newSvcTC *nvidiacomv1alpha1.TopologyConstraint
+		if oldService != nil {
+			oldSvcTC = oldService.TopologyConstraint
+		}
+		if newService != nil {
+			newSvcTC = newService.TopologyConstraint
+		}
+
+		if !topologyConstraintsEqual(oldSvcTC, newSvcTC) {
+			errs = append(errs, fmt.Errorf("spec.services[%s].topologyConstraint is immutable and cannot be added, removed, or changed after creation; "+
+				"delete and recreate the DynamoGraphDeployment to change topology constraints", serviceName))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// topologyConstraintsEqual returns true if two TopologyConstraint pointers are semantically equal.
+func topologyConstraintsEqual(a, b *nvidiacomv1alpha1.TopologyConstraint) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.PackDomain == b.PackDomain
 }
 
 func getUnique[T comparable](slice []T) []T {

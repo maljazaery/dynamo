@@ -35,8 +35,8 @@ type CheckpointRequest struct {
 	PodNamespace   string
 }
 
-// CheckpointOutcome contains the result of a checkpoint operation.
-type CheckpointOutcome struct {
+// CheckpointOutput contains the result of a checkpoint operation.
+type CheckpointOutput struct {
 	CheckpointHash string
 	CheckpointDir  string
 	Data           *manifest.CheckpointManifest
@@ -71,7 +71,7 @@ func NewCheckpointer(discoveryClient *inspect.Client, log logr.Logger) *Checkpoi
 //
 // The checkpoint directory is staged under tmp/<hash> during the operation.
 // On success, it is atomically renamed to <hash> at the base path root.
-func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, spec *config.CheckpointSpec) (*CheckpointOutcome, error) {
+func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, spec *config.CheckpointSpec) (*CheckpointOutput, error) {
 	if spec == nil {
 		return nil, fmt.Errorf("checkpoint spec is required")
 	}
@@ -128,14 +128,14 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 		"criu_dump_duration", criuDumpDuration,
 	)
 
-	return &CheckpointOutcome{
+	return &CheckpointOutput{
 		CheckpointHash: req.CheckpointHash,
 		CheckpointDir:  finalDir,
 		Data:           data,
 	}, nil
 }
 
-func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*containerSnapshot, error) {
+func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*ContainerSnapshot, error) {
 	pid, ociSpec, err := c.discoveryClient.ResolveContainer(ctx, containerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve container: %w", err)
@@ -159,7 +159,7 @@ func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*con
 		return nil, fmt.Errorf("failed to get namespaces: %w", err)
 	}
 
-	return &containerSnapshot{
+	return &ContainerSnapshot{
 		PID:        pid,
 		RootFS:     rootFS,
 		UpperDir:   upperDir,
@@ -171,7 +171,7 @@ func (c *Checkpointer) introspect(ctx context.Context, containerID string) (*con
 
 func (c *Checkpointer) configure(
 	ctx context.Context,
-	state *containerSnapshot,
+	state *ContainerSnapshot,
 	req CheckpointRequest,
 	spec *config.CheckpointSpec,
 	checkpointDir string,
@@ -227,7 +227,7 @@ func (c *Checkpointer) capture(
 	criuOpts *criurpc.CriuOpts,
 	criuSettings *config.CRIUSettings,
 	data *manifest.CheckpointManifest,
-	state *containerSnapshot,
+	state *ContainerSnapshot,
 	checkpointDir string,
 ) (time.Duration, error) {
 	criuDumpDuration, err := criu.ExecuteDump(criuOpts, checkpointDir, criuSettings, c.log)

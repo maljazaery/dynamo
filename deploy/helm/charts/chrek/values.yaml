@@ -122,6 +122,8 @@ config:
   checkpoint:
     # Path to the nsrestore binary in the placeholder image
     nsRestorePath: /usr/local/bin/nsrestore
+    # Maximum seconds to wait for a restored pod to become Ready (0 = no timeout)
+    restoreReadyTimeoutSeconds: 0
     criu:
       # Path to the criu binary
       binaryPath: /usr/local/sbin/criu

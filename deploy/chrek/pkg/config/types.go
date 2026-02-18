@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // AgentConfig holds the full agent configuration: static checkpoint settings
@@ -41,11 +42,24 @@ type CheckpointSpec struct {
 	// NSRestorePath is the path to the nsrestore binary in the placeholder image.
 	NSRestorePath string `yaml:"nsRestorePath"`
 
+	// RestoreReadyTimeoutSeconds is the maximum time in seconds to wait for a
+	// restored pod to become Ready after CRIU restore completes. 0 means no timeout.
+	RestoreReadyTimeoutSeconds int `yaml:"restoreReadyTimeoutSeconds"`
+
 	// CRIU options for dump and restore operations
 	CRIU CRIUSettings `yaml:"criu"`
 
 	// RootfsExclusions defines paths to exclude from rootfs diff capture
 	RootfsExclusions FilesystemConfig `yaml:"rootfsExclusions"`
+}
+
+// RestoreReadyTimeout returns the restore readiness timeout as a time.Duration.
+// Returns 0 (no timeout) if RestoreReadyTimeoutSeconds is 0 or negative.
+func (c *CheckpointSpec) RestoreReadyTimeout() time.Duration {
+	if c.RestoreReadyTimeoutSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(c.RestoreReadyTimeoutSeconds) * time.Second
 }
 
 // Validate checks that the CheckpointSpec has valid values.
@@ -55,6 +69,9 @@ func (c *CheckpointSpec) Validate() error {
 	}
 	if c.NSRestorePath == "" {
 		return &ConfigError{Field: "nsRestorePath", Message: "nsRestorePath is required"}
+	}
+	if c.CRIU.LogLevel < 0 || c.CRIU.LogLevel > 4 {
+		return &ConfigError{Field: "criu.logLevel", Message: "must be between 0 and 4"}
 	}
 	cgroupMode := strings.ToLower(strings.TrimSpace(c.CRIU.ManageCgroupsMode))
 	switch cgroupMode {
@@ -182,6 +199,8 @@ func (c *FilesystemConfig) Validate() error {
 	if c == nil {
 		return nil
 	}
+	// Exclusion paths must be relative to the overlay upperdir root (e.g. "./usr", "./etc").
+	// The "./" prefix prevents absolute paths from matching outside the container's filesystem.
 	for _, path := range c.GetAllExclusions() {
 		if !strings.HasPrefix(path, "./") {
 			return &ConfigError{

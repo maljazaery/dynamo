@@ -11,7 +11,7 @@ import (
 func ParseManageCgroupsMode(raw string) (criurpc.CriuCgMode, string, error) {
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	switch mode {
-	case "", "ignore":
+	case "ignore":
 		return criurpc.CriuCgMode_IGNORE, "ignore", nil
 	case "soft":
 		return criurpc.CriuCgMode_SOFT, mode, nil

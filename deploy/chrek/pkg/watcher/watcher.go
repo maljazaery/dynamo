@@ -327,7 +327,13 @@ func (w *Watcher) doRestore(ctx context.Context, pod *corev1.Pod, checkpointHash
 		return
 	}
 
-	if err := w.waitForPodReady(ctx, pod.Namespace, pod.Name, containerName); err != nil {
+	readyCtx := ctx
+	if timeout := w.config.Checkpoint.RestoreReadyTimeout(); timeout > 0 {
+		var cancel context.CancelFunc
+		readyCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	if err := w.waitForPodReady(readyCtx, pod.Namespace, pod.Name, containerName); err != nil {
 		log.Error(err, "Restore post-signal readiness check failed")
 		w.emitPodEvent(ctx, pod, corev1.EventTypeWarning, "RestoreFailed", err.Error())
 		w.annotatePod(ctx, pod, map[string]string{config.KubeAnnotationRestoreStatus: "failed"})

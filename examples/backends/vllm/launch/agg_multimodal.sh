@@ -68,7 +68,7 @@ export DYN_REQUEST_PLANE=tcp
 python -m dynamo.frontend &
 
 # Configure GPU memory optimization for specific models (if no extra args override)
-MODEL_SPECIFIC_ARGS="--gpu-memory-utilization 0.85 --max-model-len 16384"
+MODEL_SPECIFIC_ARGS="--gpu-memory-utilization 0.9 --max-model-len 32768"
 if [[ "$MODEL_NAME" == "llava-hf/llava-1.5-7b-hf" ]]; then
     MODEL_SPECIFIC_ARGS="--gpu-memory-utilization 0.85 --max-model-len 4096"
 elif [[ "$MODEL_NAME" == "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8" ]]; then

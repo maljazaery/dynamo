@@ -67,7 +67,7 @@ Images
 ```
 python examples/backends/vllm/launch/gtc/generate_requests.py \
   -n 100 \
-  --images-per-request 20 \
+  --images-per-request 10 \
   --cache-hit-rate 0.27 \
   --user-text-tokens 4000
 ```
@@ -77,13 +77,14 @@ python examples/backends/vllm/launch/gtc/generate_requests.py \
 ```
 aiperf profile \
   --model Qwen/Qwen3-VL-30B-A3B-Instruct-FP8 \
-  --input-file examples/backends/vllm/launch/gtc/100req_20img_27pct_4000word.jsonl \
+  --input-file examples/backends/vllm/launch/gtc/100req_10img_27pct_4000word.jsonl \
   --custom-dataset-type single_turn \
   --shared-system-prompt-length 5000 \
   --extra-inputs "max_tokens:500" \
   --extra-inputs "min_tokens:500" \
   --extra-inputs "ignore_eos:true" \
   --request-count 100 \
+  --concurrency 3 \
   --warmup-request-count 10 \
   --artifact-dir /workspace/logs/aiperf
 ```

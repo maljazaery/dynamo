@@ -64,12 +64,6 @@ func GetPVCBasePath(config *controller_common.CheckpointConfig) string {
 	return ""
 }
 
-// storageTypeToAPI converts controller_common storage type string to API enum
-func storageTypeToAPI(storageType string) nvidiacomv1alpha1.DynamoCheckpointStorageType {
-	// Simply cast - the values match between controller constants and API enum
-	return nvidiacomv1alpha1.DynamoCheckpointStorageType(storageType)
-}
-
 // CheckpointInfo contains resolved checkpoint information for a DGD service
 type CheckpointInfo struct {
 	// Enabled indicates if checkpointing is enabled
@@ -409,21 +403,21 @@ func InjectCheckpointIntoPodSpec(
 
 	switch storageType {
 	case controller_common.CheckpointStorageTypeS3:
-		info.StorageType = storageTypeToAPI(storageType)
+		info.StorageType = nvidiacomv1alpha1.DynamoCheckpointStorageType(storageType)
 		if storageConfig == nil || storageConfig.S3.URI == "" {
 			return fmt.Errorf("S3 storage type selected but no S3 URI configured (set checkpoint.storage.s3.uri)")
 		}
 		info.Location = fmt.Sprintf("%s/%s.tar", storageConfig.S3.URI, info.Hash)
 
 	case controller_common.CheckpointStorageTypeOCI:
-		info.StorageType = storageTypeToAPI(storageType)
+		info.StorageType = nvidiacomv1alpha1.DynamoCheckpointStorageType(storageType)
 		if storageConfig == nil || storageConfig.OCI.URI == "" {
 			return fmt.Errorf("OCI storage type selected but no OCI URI configured (set checkpoint.storage.oci.uri)")
 		}
 		info.Location = fmt.Sprintf("%s:%s", storageConfig.OCI.URI, info.Hash)
 
 	default: // PVC
-		info.StorageType = storageTypeToAPI(storageType)
+		info.StorageType = nvidiacomv1alpha1.DynamoCheckpointStorageType(storageType)
 		basePath := getPVCBasePath(storageConfig)
 		if storageConfig == nil || storageConfig.PVC.PVCName == "" {
 			return fmt.Errorf("PVC storage type selected but no PVC name configured (set checkpoint.storage.pvc.pvcName)")

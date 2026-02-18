@@ -283,6 +283,7 @@ impl OpenAIPreprocessor {
                 dp_rank: None, // dp_rank is set later in the pipeline
                 expected_output_tokens: hints.and_then(|h| h.osl),
                 priority_jump: hints.and_then(|h| h.latency_sensitivity),
+                priority: hints.and_then(|h| h.priority),
                 lora_name,
                 cache_control_ttl: nvext.cache_control.as_ref().map(|cc| cc.ttl_seconds()),
             };

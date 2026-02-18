@@ -54,6 +54,10 @@ pub struct RoutingHints {
     /// TTL in seconds for cache control pinning. None = no pinning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_control_ttl: Option<u64>,
+
+    /// Backend engine scheduling priority forwarded to the generate call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

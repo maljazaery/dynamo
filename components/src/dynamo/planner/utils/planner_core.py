@@ -296,6 +296,9 @@ class BasePlanner:
                 or PrometheusAPIClient(
                     args.metric_pulling_prometheus_endpoint,
                     args.namespace,
+                    metrics_source=getattr(
+                        args, "throughput_metrics_source", "frontend"
+                    ),
                 )
             )
 

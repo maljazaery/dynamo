@@ -166,6 +166,18 @@ def create_sla_planner_parser() -> argparse.ArgumentParser:
         help="Port for exposing planner's own metrics to Prometheus",
     )
     parser.add_argument(
+        "--throughput-metrics-source",
+        type=str,
+        choices=["frontend", "router"],
+        default=SLAPlannerDefaults.throughput_metrics_source,
+        help=(
+            "Source of throughput metrics for the Prometheus traffic client. "
+            "'frontend' reads dynamo_frontend_* histograms (default). "
+            "'router' reads dynamo_component_router_* histograms scraped from "
+            "router pods via the dynamo-router PodMonitor."
+        ),
+    )
+    parser.add_argument(
         "--no-correction",
         action="store_true",
         default=SLAPlannerDefaults.no_correction,

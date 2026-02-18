@@ -60,7 +60,7 @@ start_cpu_snapshots() {
     (
         while true; do
             echo "=== $(date -Iseconds) ===" >> "$outfile"
-            top -bn1 -o %CPU | head -30 >> "$outfile" 2>/dev/null || true
+            top -bcn1 -o %CPU | head -30 >> "$outfile" 2>/dev/null || true
             sleep 30
         done
     ) &

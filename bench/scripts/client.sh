@@ -75,8 +75,8 @@ echo "  Dry-run:       $DRY_RUN"
 echo ""
 echo "[client.sh] Waiting for server to become healthy..."
 
-HEALTH_MAX_ATTEMPTS=60
-HEALTH_INITIAL_WAIT=30
+HEALTH_MAX_ATTEMPTS=120
+HEALTH_INITIAL_WAIT=60
 HEALTH_RETRY_INTERVAL=10
 
 # For scenario 1 (vllm serve), /health returns JSON.
@@ -116,7 +116,7 @@ fi
 echo ""
 echo "[client.sh] Sending sanity request (will retry up to 60 times)..."
 
-SANITY_MAX_ATTEMPTS=60
+SANITY_MAX_ATTEMPTS=120
 SANITY_RETRY_INTERVAL=5
 sanity_ok=false
 

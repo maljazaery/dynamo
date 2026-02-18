@@ -27,7 +27,7 @@ SCENARIOS="1 2 3"
 DRY_RUN=false
 ACCOUNT=""
 PARTITION="batch"
-TIME_LIMIT="04:00:00"
+TIME_LIMIT="06:00:00"
 OUTPUT_DIR=""
 EXTRA_SRUN_FLAGS="${EXTRA_SRUN_FLAGS:-}"
 COOLDOWN_SECS=30
@@ -58,6 +58,7 @@ Required:
   --account ACCOUNT         Slurm account for salloc
 
 Options:
+  --model MODEL             HF model name (default: Qwen/Qwen3-8B)
   --partition PARTITION     Slurm partition (default: batch)
   --time TIME               Slurm time limit (default: 04:00:00)
   --output-dir DIR          Results output directory (default: $PWD/bench_results)
@@ -72,6 +73,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --account)      ACCOUNT="$2"; shift 2 ;;
+        --model)        MODEL="$2"; shift 2 ;;
         --partition)    PARTITION="$2"; shift 2 ;;
         --time)         TIME_LIMIT="$2"; shift 2 ;;
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
@@ -118,7 +120,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     echo "  Time limit: $TIME_LIMIT"
 
     # Rebuild the argument list for re-invocation
-    RERUN_ARGS=(--account "$ACCOUNT" --partition "$PARTITION" --time "$TIME_LIMIT")
+    RERUN_ARGS=(--account "$ACCOUNT" --model "$MODEL" --partition "$PARTITION" --time "$TIME_LIMIT")
     [[ -n "$OUTPUT_DIR" ]] && RERUN_ARGS+=(--output-dir "$OUTPUT_DIR")
     RERUN_ARGS+=(--sqsh "$SQSH")
     RERUN_ARGS+=(--scenario "$SCENARIOS")

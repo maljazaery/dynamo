@@ -2102,7 +2102,7 @@ func TestPropagateTopologyCondition(t *testing.T) {
 			dgd: &v1alpha1.DynamoGraphDeployment{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test", Namespace: "default",
-					Annotations: map[string]string{consts.KubeAnnotationEnableGrove: "false"},
+					Annotations: map[string]string{commonconsts.KubeAnnotationEnableGrove: "false"},
 				},
 				Spec: v1alpha1.DynamoGraphDeploymentSpec{
 					TopologyConstraint: &v1alpha1.TopologyConstraint{PackDomain: v1alpha1.TopologyDomainRack},

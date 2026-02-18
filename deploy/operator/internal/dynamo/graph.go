@@ -1390,11 +1390,11 @@ func GenerateGrovePodCliqueSet(
 
 		if isMultinode {
 			scalingGroups = append(scalingGroups, grovev1alpha1.PodCliqueScalingGroupConfig{
-				Name:                strings.ToLower(serviceName),
-				CliqueNames:         cliqueNames,
-				Replicas:            component.Replicas,
-				MinAvailable:        ptr.To(int32(1)),
-				TopologyConstraint:  toGroveTopologyConstraint(component.TopologyConstraint),
+				Name:               strings.ToLower(serviceName),
+				CliqueNames:        cliqueNames,
+				Replicas:           component.Replicas,
+				MinAvailable:       ptr.To(int32(1)),
+				TopologyConstraint: toGroveTopologyConstraint(component.TopologyConstraint),
 			})
 		}
 	}

@@ -52,7 +52,7 @@ from dynamo.vllm.multimodal_handlers import (
 )
 
 from .args import Config, parse_args
-from .chrek import get_checkpoint_config
+from .checkpoint_restore import get_checkpoint_config
 from .handlers import DecodeWorkerHandler, PrefillWorkerHandler
 from .health_check import (
     VllmHealthCheckPayload,

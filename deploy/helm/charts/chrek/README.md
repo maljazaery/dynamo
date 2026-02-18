@@ -1,6 +1,6 @@
 # Chrek Helm Chart
 
-> ⚠️ **Experimental Feature**: ChReK is currently in **beta/preview**. It requires privileged mode for restore operations, which may not be suitable for all production environments. See [Prerequisites](#prerequisites) for security considerations.
+> ⚠️ **Experimental Feature**: ChReK is currently in **beta/preview**. The DaemonSet runs in privileged mode to perform CRIU operations. See [Prerequisites](#prerequisites) for security considerations.
 
 This Helm chart deploys the checkpoint/restore infrastructure for NVIDIA Dynamo, including:
 - Persistent Volume Claim (PVC) for checkpoint storage
@@ -14,14 +14,14 @@ This Helm chart deploys the checkpoint/restore infrastructure for NVIDIA Dynamo,
 
 ## Prerequisites
 
-⚠️ **Security Warning**: ChReK restore operations require **privileged mode**, which grants containers elevated host access. This may violate security policies in production environments. Only deploy in environments where privileged containers are acceptable.
+⚠️ **Security Warning**: The ChReK DaemonSet runs in **privileged mode** with `hostPID`, `hostIPC`, and `hostNetwork` to perform CRIU checkpoint/restore operations. Workload pods do not need privileged mode. Only deploy in environments where a privileged DaemonSet is acceptable.
 
 - Kubernetes 1.21+
 - GPU nodes with NVIDIA runtime (`nvidia` runtime class)
 - CRIU support in the container runtime (containerd with CRIU plugin)
-- NVIDIA Dynamo operator installed (cluster-wide or namespace-scoped)
+- NVIDIA Dynamo operator installed (cluster-wide or namespace-scoped), **or** manual pod configuration — see [Standalone Usage](../../../../docs/pages/kubernetes/chrek/standalone.md#using-chrek-without-the-dynamo-operator) for required labels, seccomp profiles, command overrides, and deployment strategy when running without the operator
 - RWX (ReadWriteMany) storage class for multi-node deployments
-- **Security clearance for privileged pods** (required for restore operations)
+- **Security clearance for privileged DaemonSet** (the ChReK agent runs privileged with hostPID/hostIPC/hostNetwork)
 
 ## Installation
 

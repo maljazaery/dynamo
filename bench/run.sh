@@ -29,6 +29,7 @@ ACCOUNT=""
 PARTITION="batch"
 TIME_LIMIT="06:00:00"
 OUTPUT_DIR=""
+RUN_NAME=""
 EXTRA_SRUN_FLAGS="${EXTRA_SRUN_FLAGS:-}"
 COOLDOWN_SECS=30
 
@@ -59,8 +60,9 @@ Required:
 
 Options:
   --model MODEL             HF model name (default: Qwen/Qwen3-8B)
+  --name NAME               Run name (default: run_<timestamp>)
   --partition PARTITION     Slurm partition (default: batch)
-  --time TIME               Slurm time limit (default: 04:00:00)
+  --time TIME               Slurm time limit (default: 06:00:00)
   --output-dir DIR          Results output directory (default: $PWD/bench_results)
   --scenario {1,2,3,all}    Which scenario(s) to run (default: all)
   --sqsh PATH               Container sqsh image path
@@ -74,6 +76,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --account)      ACCOUNT="$2"; shift 2 ;;
         --model)        MODEL="$2"; shift 2 ;;
+        --name)         RUN_NAME="$2"; shift 2 ;;
         --partition)    PARTITION="$2"; shift 2 ;;
         --time)         TIME_LIMIT="$2"; shift 2 ;;
         --output-dir)   OUTPUT_DIR="$2"; shift 2 ;;
@@ -121,6 +124,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
 
     # Rebuild the argument list for re-invocation
     RERUN_ARGS=(--account "$ACCOUNT" --model "$MODEL" --partition "$PARTITION" --time "$TIME_LIMIT")
+    [[ -n "$RUN_NAME" ]] && RERUN_ARGS+=(--name "$RUN_NAME")
     [[ -n "$OUTPUT_DIR" ]] && RERUN_ARGS+=(--output-dir "$OUTPUT_DIR")
     RERUN_ARGS+=(--sqsh "$SQSH")
     RERUN_ARGS+=(--scenario "$SCENARIOS")
@@ -160,7 +164,11 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="$PWD/bench_results"
 fi
-RUN_DIR="${OUTPUT_DIR}/run_${TIMESTAMP}"
+if [[ -n "$RUN_NAME" ]]; then
+    RUN_DIR="${OUTPUT_DIR}/${RUN_NAME}"
+else
+    RUN_DIR="${OUTPUT_DIR}/run_${TIMESTAMP}"
+fi
 mkdir -p "$RUN_DIR"
 echo "  Results dir: $RUN_DIR"
 

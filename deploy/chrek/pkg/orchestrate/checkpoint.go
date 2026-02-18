@@ -42,8 +42,8 @@ type CheckpointOutcome struct {
 	Data           *manifest.CheckpointManifest
 }
 
-// containerSnapshot holds runtime/container info needed for checkpointing.
-type containerSnapshot struct {
+// ContainerSnapshot holds runtime/container info needed for checkpointing.
+type ContainerSnapshot struct {
 	PID        int
 	RootFS     string
 	UpperDir   string

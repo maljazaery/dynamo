@@ -21,6 +21,7 @@ MODEL=""
 ISL=""
 OSL=""
 CONCURRENCIES=""
+REQ_MULTIPLIER=""
 OUTPUT_DIR=""
 DRY_RUN=false
 
@@ -32,13 +33,14 @@ while [[ $# -gt 0 ]]; do
         --isl)           ISL="$2"; shift 2 ;;
         --osl)           OSL="$2"; shift 2 ;;
         --concurrencies) CONCURRENCIES="$2"; shift 2 ;;
+        --req-multiplier) REQ_MULTIPLIER="$2"; shift 2 ;;
         --output-dir)    OUTPUT_DIR="$2"; shift 2 ;;
         --dry-run)       DRY_RUN=true; shift ;;
         *)               echo "ERROR: client.sh: Unknown option: $1" >&2; exit 1 ;;
     esac
 done
 
-for var in SERVER_HOST SCENARIO MODEL ISL OSL CONCURRENCIES OUTPUT_DIR; do
+for var in SERVER_HOST SCENARIO MODEL ISL OSL CONCURRENCIES REQ_MULTIPLIER OUTPUT_DIR; do
     if [[ -z "${!var}" ]]; then
         echo "ERROR: client.sh: --$(echo $var | tr '[:upper:]' '[:lower:]' | tr '_' '-') is required" >&2
         exit 1
@@ -56,7 +58,6 @@ if [[ "$DRY_RUN" == "true" ]]; then
     REQ_MULTIPLIER=5
     WARMUP_MULTIPLIER=1
 else
-    REQ_MULTIPLIER=10
     WARMUP_MULTIPLIER=2
 fi
 

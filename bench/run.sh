@@ -23,6 +23,7 @@ MODEL="Qwen/Qwen3-8B"
 ISL=1024
 OSL=1024
 CONCURRENCIES="1 2 4 8 16 32 64 128 256 512 1024"
+REQ_MULTIPLIER=10
 SCENARIOS="1 2 3"
 DRY_RUN=false
 ACCOUNT=""
@@ -60,6 +61,9 @@ Required:
 
 Options:
   --model MODEL             HF model name (default: Qwen/Qwen3-8B)
+  --isl N                   Input sequence length (default: 1024)
+  --osl N                   Output sequence length (default: 1024)
+  --req-multiplier N        Requests per concurrency = C * N (default: 10)
   --name NAME               Run name (default: run_<timestamp>)
   --partition PARTITION     Slurm partition (default: batch)
   --time TIME               Slurm time limit (default: 06:00:00)
@@ -76,6 +80,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --account)      ACCOUNT="$2"; shift 2 ;;
         --model)        MODEL="$2"; shift 2 ;;
+        --isl)          ISL="$2"; shift 2 ;;
+        --osl)          OSL="$2"; shift 2 ;;
+        --req-multiplier) REQ_MULTIPLIER="$2"; shift 2 ;;
         --name)         RUN_NAME="$2"; shift 2 ;;
         --partition)    PARTITION="$2"; shift 2 ;;
         --time)         TIME_LIMIT="$2"; shift 2 ;;
@@ -123,7 +130,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     echo "  Time limit: $TIME_LIMIT"
 
     # Rebuild the argument list for re-invocation
-    RERUN_ARGS=(--account "$ACCOUNT" --model "$MODEL" --partition "$PARTITION" --time "$TIME_LIMIT")
+    RERUN_ARGS=(--account "$ACCOUNT" --model "$MODEL" --isl "$ISL" --osl "$OSL" --req-multiplier "$REQ_MULTIPLIER" --partition "$PARTITION" --time "$TIME_LIMIT")
     [[ -n "$RUN_NAME" ]] && RERUN_ARGS+=(--name "$RUN_NAME")
     [[ -n "$OUTPUT_DIR" ]] && RERUN_ARGS+=(--output-dir "$OUTPUT_DIR")
     RERUN_ARGS+=(--sqsh "$SQSH")
@@ -182,6 +189,7 @@ cat > "${RUN_DIR}/config.json" <<CONFIGEOF
   "model": "${MODEL}",
   "isl": ${ISL},
   "osl": ${OSL},
+  "req_multiplier": ${REQ_MULTIPLIER},
   "concurrencies": "$(echo $CONCURRENCIES | tr ' ' ',')",
   "scenarios": "$(echo $SCENARIOS | tr ' ' ',')",
   "dry_run": ${DRY_RUN},
@@ -246,6 +254,7 @@ for SCENARIO in $SCENARIOS; do
         --isl "$ISL"
         --osl "$OSL"
         --concurrencies "$CONCURRENCIES"
+        --req-multiplier "$REQ_MULTIPLIER"
         --output-dir "$SCENARIO_DIR"
     )
     [[ "$DRY_RUN" == "true" ]] && CLIENT_CMD+=(--dry-run)

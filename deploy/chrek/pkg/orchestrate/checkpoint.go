@@ -75,6 +75,10 @@ func (c *Checkpointer) Checkpoint(ctx context.Context, req CheckpointRequest, sp
 	if spec == nil {
 		return nil, fmt.Errorf("checkpoint spec is required")
 	}
+	if err := ValidateCheckpointHash(req.CheckpointHash); err != nil {
+		return nil, err
+	}
+
 	checkpointStart := time.Now()
 	c.log.Info("=== Starting checkpoint operation ===")
 

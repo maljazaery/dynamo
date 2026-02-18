@@ -74,17 +74,15 @@ func RestoreInNamespace(ctx context.Context, opts RestoreOptions, log logr.Logge
 	var workDirFD int32 = -1
 	if settings.WorkDir != "" {
 		if err := os.MkdirAll(settings.WorkDir, 0755); err != nil {
-			log.Error(err, "Failed to create work directory")
-		} else {
-			f, fd, err := criuutil.OpenPathForCRIU(settings.WorkDir)
-			if err == nil {
-				workDirFile = f
-				workDirFD = fd
-				defer workDirFile.Close()
-			} else {
-				log.Error(err, "Failed to open CRIU work directory")
-			}
+			return 0, 0, fmt.Errorf("failed to create CRIU work directory %s: %w", settings.WorkDir, err)
 		}
+		f, fd, err := criuutil.OpenPathForCRIU(settings.WorkDir)
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed to open CRIU work directory %s: %w", settings.WorkDir, err)
+		}
+		workDirFile = f
+		workDirFD = fd
+		defer workDirFile.Close()
 	}
 
 	extMounts, err := generateRestoreExtMountMaps(m)

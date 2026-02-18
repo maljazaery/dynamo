@@ -50,6 +50,9 @@ type CheckpointSpec struct {
 
 // Validate checks that the CheckpointSpec has valid values.
 func (c *CheckpointSpec) Validate() error {
+	if strings.TrimSpace(c.BasePath) == "" {
+		return &ConfigError{Field: "basePath", Message: "basePath is required"}
+	}
 	if c.NSRestorePath == "" {
 		return &ConfigError{Field: "nsRestorePath", Message: "nsRestorePath is required"}
 	}

@@ -249,6 +249,11 @@ func (w *Watcher) handleRestorePodEvent(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 
+	if err := orchestrate.ValidateCheckpointHash(checkpointHash); err != nil {
+		w.log.Error(err, "Invalid checkpoint hash on restore pod", "pod", podKey, "hash", checkpointHash)
+		return
+	}
+
 	checkpointDir := filepath.Join(w.config.Checkpoint.BasePath, checkpointHash)
 	if _, err := os.Stat(checkpointDir); os.IsNotExist(err) {
 		w.log.V(1).Info("Checkpoint not ready on disk, skipping restore", "pod", podKey, "checkpoint_hash", checkpointHash)

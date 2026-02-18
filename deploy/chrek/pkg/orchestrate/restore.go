@@ -66,7 +66,7 @@ func (r *Restorer) Restore(ctx context.Context, req RestoreRequest) (*RestoreRes
 		"container", req.ContainerName,
 	)
 
-	if err := validateCheckpointHash(req.CheckpointHash); err != nil {
+	if err := ValidateCheckpointHash(req.CheckpointHash); err != nil {
 		return nil, err
 	}
 	checkpointPath := filepath.Join(r.cfg.CheckpointBasePath, req.CheckpointHash)
@@ -257,7 +257,8 @@ func validateProcessState(procRoot string, pid int) error {
 	return fmt.Errorf("state not found in %s", statusPath)
 }
 
-func validateCheckpointHash(checkpointHash string) error {
+// ValidateCheckpointHash checks that a checkpoint hash is safe for use in filesystem paths.
+func ValidateCheckpointHash(checkpointHash string) error {
 	hash := strings.TrimSpace(checkpointHash)
 	if hash == "" {
 		return fmt.Errorf("checkpoint hash is required")

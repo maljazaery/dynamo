@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -66,9 +67,7 @@ func LogRestoreSummary(path string, log logr.Logger) {
 		}
 		tail = append(tail, trimmed)
 	}
-	for i, j := 0, len(tail)-1; i < j; i, j = i+1, j-1 {
-		tail[i], tail[j] = tail[j], tail[i]
-	}
+	slices.Reverse(tail)
 	if len(tail) > 0 {
 		log.Info("CRIU restore tail", "path", path, "lines", strings.Join(tail, "\n"))
 	}

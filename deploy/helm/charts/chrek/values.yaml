@@ -140,7 +140,7 @@ config:
       extUnixSk: true         # External Unix sockets
       linkRemap: true         # Handle deleted-but-open files
       extMasters: true        # External bind mount masters
-      manageCgroupsMode: soft      # CRIU cgroup management mode (fixed: soft)
+      manageCgroupsMode: soft      # CRIU cgroup management mode (ignore/soft/full/strict)
 
       # Restore-specific options (only apply during CRIU restore, not dump)
       rstSibling: true         # Restore as sibling process (required for go-criu swrk mode)
